@@ -7,9 +7,14 @@ It never handles private keys and never talks to a node directly. The browser
 provider remains responsible for permissions, signing, postage, and resource
 limits.
 
-## Install
+This is an early prototype. The repository is public, but the package is still
+marked `"private": true` and is not published to npm yet.
+
+## Development Setup
 
 ```sh
+git clone git@github.com:solardev-xyz/swarm-kit.git
+cd swarm-kit
 npm install
 ```
 
@@ -92,8 +97,13 @@ console.log(big.chunkCount, value)
 ## DID-Style Documents
 
 DID-style documents store the document as a chunk graph and write a small SOC
-pointer at a well-known identifier. Any reader can resolve a user's current
-document from `(owner, identifier)`.
+pointer at a well-known identifier. Any reader can resolve the document from
+`(owner, identifier)`.
+
+This helper is experimental and currently best treated as a one-shot document
+write for a namespace. Raw SOC identifiers are write-once in practice, so
+updating a document should use a new namespace/version until `swarm-kit` grows a
+revisioned DID document pattern.
 
 ```ts
 const written = await kit.did.writeDocument({
