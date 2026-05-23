@@ -473,6 +473,233 @@ function uint64be(value) {
   return bytes;
 }
 
+// src/errors.ts
+var SwarmKitError = class extends Error {
+  code;
+  reason;
+  cause;
+  constructor(message, options = {}) {
+    super(message);
+    this.name = "SwarmKitError";
+    this.code = options.code;
+    this.reason = options.reason;
+    this.cause = options.cause;
+  }
+};
+function getSwarmErrorReason(error) {
+  return error?.data?.reason ?? error?.reason;
+}
+function isSwarmReason(error, reason) {
+  return getSwarmErrorReason(error) === reason;
+}
+function normalizeError(error) {
+  if (error instanceof SwarmKitError) return error;
+  const providerError = error;
+  return new SwarmKitError(providerError?.message || String(error), buildErrorOptions(providerError, error));
+}
+function buildErrorOptions(providerError, cause) {
+  const options = { cause };
+  if (providerError.code !== void 0) options.code = providerError.code;
+  if (providerError.data?.reason !== void 0) options.reason = providerError.data.reason;
+  return options;
+}
+
+// src/soc.ts
+async function getSigningIdentity(provider) {
+  return callSwarm(provider, "swarm_getSigningIdentity");
+}
+async function writeSocBytes(provider, identifier, data, options = {}) {
+  return callSwarm(provider, "swarm_writeSingleOwnerChunk", {
+    identifier,
+    data: normalizeBytes(data),
+    span: options.span
+  });
+}
+async function readSocBytesByAddress(provider, address) {
+  return decodeSocRead(await callSwarm(provider, "swarm_readSingleOwnerChunk", { address }));
+}
+async function readSocBytesByOwnerAndIdentifier(provider, owner, identifier) {
+  return decodeSocRead(await callSwarm(provider, "swarm_readSingleOwnerChunk", { owner, identifier }));
+}
+async function writeSocText(provider, identifier, text, options = {}) {
+  return writeSocBytes(provider, identifier, utf8ToBytes(text), options);
+}
+async function readSocTextByAddress(provider, address) {
+  return bytesToUtf8((await readSocBytesByAddress(provider, address)).bytes);
+}
+async function readSocTextByOwnerAndIdentifier(provider, owner, identifier) {
+  return bytesToUtf8((await readSocBytesByOwnerAndIdentifier(provider, owner, identifier)).bytes);
+}
+async function writeSocJson(provider, identifier, value, options = {}) {
+  return writeSocBytes(provider, identifier, jsonToBytes(value), options);
+}
+async function readSocJsonByAddress(provider, address) {
+  return bytesToJson((await readSocBytesByAddress(provider, address)).bytes);
+}
+async function readSocJsonByOwnerAndIdentifier(provider, owner, identifier) {
+  return bytesToJson((await readSocBytesByOwnerAndIdentifier(provider, owner, identifier)).bytes);
+}
+function decodeSocRead(result) {
+  const decoded = {
+    bytes: base64ToBytes(result.data),
+    span: result.span,
+    reference: result.reference,
+    owner: result.owner,
+    identifier: result.identifier
+  };
+  if (result.signature !== void 0) decoded.signature = result.signature;
+  return decoded;
+}
+
+// src/indexed-soc.ts
+var DEFAULT_ENTRY_TAG = "entry";
+var DEFAULT_LABEL = "indexed SOC stream";
+var DEFAULT_MAX_APPEND_ATTEMPTS = 3;
+function createIndexedSocStream(provider, options) {
+  const parts = options.parts ?? [];
+  const entryTag = options.entryTag ?? DEFAULT_ENTRY_TAG;
+  const label = options.label ?? DEFAULT_LABEL;
+  const maxAppendAttempts = options.maxAppendAttempts ?? DEFAULT_MAX_APPEND_ATTEMPTS;
+  const sameEnvelope4 = options.sameEnvelope ?? defaultSameEnvelope;
+  function entryIdentifier(index) {
+    assertIndexedSocIndex(index, `${label} index`);
+    return deriveIdentifier([options.namespace, ...parts, entryTag, index]);
+  }
+  async function getOwner() {
+    return (await getSigningIdentity(provider)).owner;
+  }
+  async function readRecord(owner, index) {
+    assertIndexedSocIndex(index, `${label} index`);
+    const identifier = entryIdentifier(index);
+    try {
+      const soc = await readSocBytesByOwnerAndIdentifier(provider, owner, identifier);
+      if (soc.identifier.toLowerCase() !== identifier.toLowerCase()) {
+        throw new Error(`${label} identifier mismatch for ${soc.reference}`);
+      }
+      const envelope = options.parseEnvelope(bytesToJson(soc.bytes), {
+        index,
+        identifier,
+        owner: soc.owner,
+        reference: soc.reference
+      });
+      return { envelope, soc };
+    } catch (error) {
+      if (isSwarmReason(error, "chunk_not_found")) return null;
+      throw error;
+    }
+  }
+  async function readAt(owner, index) {
+    const record = await readRecord(owner, index);
+    return record ? toStreamEntry(record) : null;
+  }
+  async function findLatestIndex(owner, findOptions = {}) {
+    return findLatestContiguousIndex(
+      async (index) => await readRecord(owner, index) !== null,
+      findOptions
+    );
+  }
+  async function readLatestRecord(owner) {
+    const index = await findLatestIndex(owner);
+    return index < 0 ? null : readRecord(owner, index);
+  }
+  return {
+    entryIdentifier,
+    getOwner,
+    append: async (createEnvelope) => {
+      const owner = await getOwner();
+      let lastCollision = null;
+      for (let attempt = 0; attempt < maxAppendAttempts; attempt += 1) {
+        const current = await readLatestRecord(owner);
+        const index = current ? getRecordIndex(current) + 1 : 0;
+        const previousReference = current?.soc.reference ?? null;
+        const envelope = await createEnvelope({ owner, index, previousReference });
+        const identifier = entryIdentifier(index);
+        const entryWrite = await writeSocJson(provider, identifier, envelope);
+        const stored = await readRecord(owner, index);
+        if (stored && sameEnvelope4(stored.envelope, envelope)) {
+          return {
+            ...toStreamEntry(stored),
+            entryWrite
+          };
+        }
+        lastCollision = new SwarmKitError(`${label} append collision at index ${index}`, {
+          reason: "soc_write_collision"
+        });
+      }
+      throw lastCollision ?? new SwarmKitError(`${label} append failed`, { reason: "soc_write_collision" });
+    },
+    readRecord,
+    readAt,
+    findLatestIndex,
+    readLatestRecord,
+    readLatest: async (owner, readOptions = {}) => {
+      const limit = readOptions.limit ?? 10;
+      assertIndexedSocLimit(limit, `${label} read limit`);
+      if (limit === 0) return [];
+      const latestIndex = await findLatestIndex(owner);
+      if (latestIndex < 0) return [];
+      const start = Math.max(0, latestIndex - limit + 1);
+      const entries = [];
+      for (let index = latestIndex; index >= start; index -= 1) {
+        const entry = await readAt(owner, index);
+        if (!entry) break;
+        entries.push(entry);
+      }
+      return entries;
+    }
+  };
+}
+async function findLatestContiguousIndex(existsAt, options = {}) {
+  const maxIndex = options.maxIndex ?? Number.MAX_SAFE_INTEGER;
+  assertIndexedSocIndex(maxIndex, "maxIndex");
+  if (!await existsAt(0)) return -1;
+  let low = 0;
+  let high = 1;
+  while (high <= maxIndex && await existsAt(high)) {
+    low = high;
+    if (high === maxIndex) return high;
+    high = Math.min(high * 2, maxIndex);
+  }
+  let left = low + 1;
+  let right = Math.min(high - 1, maxIndex);
+  while (left <= right) {
+    const mid = left + Math.floor((right - left) / 2);
+    if (await existsAt(mid)) {
+      low = mid;
+      left = mid + 1;
+    } else {
+      right = mid - 1;
+    }
+  }
+  return low;
+}
+function assertIndexedSocIndex(index, label = "index") {
+  if (!Number.isSafeInteger(index) || index < 0) {
+    throw new Error(`Indexed SOC ${label} must be a non-negative safe integer`);
+  }
+}
+function assertIndexedSocLimit(limit, label = "limit") {
+  if (!Number.isSafeInteger(limit) || limit < 0) {
+    throw new Error(`Indexed SOC ${label} must be a non-negative safe integer`);
+  }
+}
+function toStreamEntry(record) {
+  return {
+    owner: record.soc.owner,
+    identifier: record.soc.identifier,
+    reference: record.soc.reference,
+    envelope: record.envelope
+  };
+}
+function getRecordIndex(record) {
+  const index = record.envelope.index;
+  if (Number.isSafeInteger(index) && index >= 0) return index;
+  throw new Error("Indexed SOC envelope must expose its index");
+}
+function defaultSameEnvelope(stored, expected) {
+  return JSON.stringify(stored) === JSON.stringify(expected);
+}
+
 // src/objects.ts
 var DEFAULT_CHUNK_SIZE = 4096;
 var MAX_CHILDREN_PER_NODE = 32;
@@ -600,124 +827,113 @@ function sumChildren(children) {
   return children.reduce((sum, child) => sum + child.size, 0);
 }
 
-// src/soc.ts
-async function getSigningIdentity(provider) {
-  return callSwarm(provider, "swarm_getSigningIdentity");
-}
-async function writeSocBytes(provider, identifier, data, options = {}) {
-  return callSwarm(provider, "swarm_writeSingleOwnerChunk", {
-    identifier,
-    data: normalizeBytes(data),
-    span: options.span
-  });
-}
-async function readSocBytesByAddress(provider, address) {
-  return decodeSocRead(await callSwarm(provider, "swarm_readSingleOwnerChunk", { address }));
-}
-async function readSocBytesByOwnerAndIdentifier(provider, owner, identifier) {
-  return decodeSocRead(await callSwarm(provider, "swarm_readSingleOwnerChunk", { owner, identifier }));
-}
-async function writeSocText(provider, identifier, text, options = {}) {
-  return writeSocBytes(provider, identifier, utf8ToBytes(text), options);
-}
-async function readSocTextByAddress(provider, address) {
-  return bytesToUtf8((await readSocBytesByAddress(provider, address)).bytes);
-}
-async function readSocTextByOwnerAndIdentifier(provider, owner, identifier) {
-  return bytesToUtf8((await readSocBytesByOwnerAndIdentifier(provider, owner, identifier)).bytes);
-}
-async function writeSocJson(provider, identifier, value, options = {}) {
-  return writeSocBytes(provider, identifier, jsonToBytes(value), options);
-}
-async function readSocJsonByAddress(provider, address) {
-  return bytesToJson((await readSocBytesByAddress(provider, address)).bytes);
-}
-async function readSocJsonByOwnerAndIdentifier(provider, owner, identifier) {
-  return bytesToJson((await readSocBytesByOwnerAndIdentifier(provider, owner, identifier)).bytes);
-}
-function decodeSocRead(result) {
-  const decoded = {
-    bytes: base64ToBytes(result.data),
-    span: result.span,
-    reference: result.reference,
-    owner: result.owner,
-    identifier: result.identifier
-  };
-  if (result.signature !== void 0) decoded.signature = result.signature;
-  return decoded;
-}
-
 // src/did.ts
 var DEFAULT_DID_NAMESPACE = "swarm-kit:did-document:v1";
 function didDocumentIdentifier(options = {}) {
-  return deriveIdentifier([options.namespace ?? DEFAULT_DID_NAMESPACE]);
+  return didDocumentRevisionIdentifier(0, options);
+}
+function didDocumentRevisionIdentifier(index, options = {}) {
+  assertIndexedSocIndex(index, "DID document revision");
+  return deriveIdentifier([options.namespace ?? DEFAULT_DID_NAMESPACE, "revision", index]);
+}
+function createDidDocument(provider, options = {}) {
+  const stream = createDidDocumentStream(provider, options);
+  async function hydrateRevision(entry) {
+    const document = await readObjectJson(provider, entry.envelope.documentReference);
+    return {
+      ...entry.envelope,
+      owner: entry.owner,
+      identifier: entry.identifier,
+      reference: entry.reference,
+      document,
+      pointer: entry.envelope
+    };
+  }
+  async function hydrateRecord(record) {
+    return hydrateRevision({
+      owner: record.soc.owner,
+      identifier: record.soc.identifier,
+      reference: record.soc.reference,
+      envelope: record.envelope
+    });
+  }
+  return {
+    revisionIdentifier: stream.entryIdentifier,
+    getOwner: stream.getOwner,
+    async write(document, writeOptions = {}) {
+      const published = await publishObjectJson(provider, document);
+      const writtenAt = new Date(writeOptions.at ?? Date.now()).toISOString();
+      const appended = await stream.append(({ index, previousReference }) => ({
+        version: 1,
+        type: "swarm-kit:did-document-revision",
+        revision: index,
+        index,
+        previousReference,
+        documentReference: published.reference,
+        documentSize: published.size,
+        writtenAt
+      }));
+      return {
+        ...appended.envelope,
+        owner: appended.owner,
+        identifier: appended.identifier,
+        reference: appended.reference,
+        document,
+        pointer: appended.envelope,
+        revisionWrite: appended.entryWrite,
+        entryWrite: appended.entryWrite
+      };
+    },
+    async readAt(owner, revision) {
+      const entry = await stream.readAt(owner, revision);
+      return entry ? hydrateRevision(entry) : null;
+    },
+    async readLatest(owner) {
+      const record = await stream.readLatestRecord(owner);
+      return record ? hydrateRecord(record) : null;
+    },
+    async readHistory(owner, readOptions = {}) {
+      const entries = await stream.readLatest(owner, { limit: readOptions.limit ?? 10 });
+      return Promise.all(entries.map(hydrateRevision));
+    }
+  };
 }
 async function writeDidDocument(provider, document, options = {}) {
-  const identifier = didDocumentIdentifier(options);
-  const published = await publishObjectJson(provider, document);
-  const pointer = {
-    version: 1,
-    type: "swarm-kit:did-document-pointer",
-    documentReference: published.reference,
-    documentSize: published.size,
-    writtenAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-  const result = await writeSocJson(provider, identifier, pointer);
-  return {
-    ...result,
-    document,
-    documentReference: published.reference,
-    pointer
-  };
+  return createDidDocument(provider, options).write(document);
 }
 async function readDidDocument(provider, owner, options = {}) {
-  const identifier = didDocumentIdentifier(options);
-  const pointer = await readSocJsonByOwnerAndIdentifier(provider, owner, identifier);
-  validatePointer(pointer);
-  const document = await readObjectJson(provider, pointer.documentReference);
+  const latest = await createDidDocument(provider, options).readLatest(owner);
+  if (!latest) {
+    throw new Error("DID document not found");
+  }
+  return latest;
+}
+function createDidDocumentStream(provider, options) {
+  return createIndexedSocStream(provider, createDidDocumentStreamOptions(options));
+}
+function createDidDocumentStreamOptions(options) {
+  const namespace = options.namespace ?? DEFAULT_DID_NAMESPACE;
   return {
-    owner,
-    identifier,
-    reference: pointer.documentReference,
-    document,
-    pointer
+    namespace,
+    entryTag: "revision",
+    label: "DID document",
+    parseEnvelope: (value, context) => {
+      validateRevisionEnvelope(value);
+      if (value.index !== context.index || value.revision !== context.index) {
+        throw new Error(`DID document revision index mismatch for ${context.reference}`);
+      }
+      return value;
+    },
+    sameEnvelope
   };
 }
-function validatePointer(pointer) {
-  if (pointer.version !== 1 || pointer.type !== "swarm-kit:did-document-pointer" || typeof pointer.documentReference !== "string" || typeof pointer.documentSize !== "number" || !Number.isSafeInteger(pointer.documentSize) || pointer.documentSize < 0 || typeof pointer.writtenAt !== "string") {
-    throw new Error("Invalid DID document pointer");
+function validateRevisionEnvelope(revision) {
+  if (revision.version !== 1 || revision.type !== "swarm-kit:did-document-revision" || !Number.isSafeInteger(revision.revision) || revision.revision < 0 || !Number.isSafeInteger(revision.index) || revision.index < 0 || !(typeof revision.previousReference === "string" || revision.previousReference === null) || typeof revision.documentReference !== "string" || typeof revision.documentSize !== "number" || !Number.isSafeInteger(revision.documentSize) || revision.documentSize < 0 || typeof revision.writtenAt !== "string") {
+    throw new Error("Invalid DID document revision");
   }
 }
-
-// src/errors.ts
-var SwarmKitError = class extends Error {
-  code;
-  reason;
-  cause;
-  constructor(message, options = {}) {
-    super(message);
-    this.name = "SwarmKitError";
-    this.code = options.code;
-    this.reason = options.reason;
-    this.cause = options.cause;
-  }
-};
-function getSwarmErrorReason(error) {
-  return error?.data?.reason ?? error?.reason;
-}
-function isSwarmReason(error, reason) {
-  return getSwarmErrorReason(error) === reason;
-}
-function normalizeError(error) {
-  if (error instanceof SwarmKitError) return error;
-  const providerError = error;
-  return new SwarmKitError(providerError?.message || String(error), buildErrorOptions(providerError, error));
-}
-function buildErrorOptions(providerError, cause) {
-  const options = { cause };
-  if (providerError.code !== void 0) options.code = providerError.code;
-  if (providerError.data?.reason !== void 0) options.reason = providerError.data.reason;
-  return options;
+function sameEnvelope(a, b) {
+  return a.version === b.version && a.type === b.type && a.revision === b.revision && a.index === b.index && a.previousReference === b.previousReference && a.documentReference === b.documentReference && a.documentSize === b.documentSize && a.writtenAt === b.writtenAt;
 }
 
 // src/epoch-feed.ts
@@ -807,54 +1023,24 @@ function periodToMs(period) {
   return period.seconds * 1e3;
 }
 
-// src/indexed-soc.ts
-async function findLatestContiguousIndex(existsAt, options = {}) {
-  const maxIndex = options.maxIndex ?? Number.MAX_SAFE_INTEGER;
-  assertIndexedSocIndex(maxIndex, "maxIndex");
-  if (!await existsAt(0)) return -1;
-  let low = 0;
-  let high = 1;
-  while (high <= maxIndex && await existsAt(high)) {
-    low = high;
-    if (high === maxIndex) return high;
-    high = Math.min(high * 2, maxIndex);
-  }
-  let left = low + 1;
-  let right = Math.min(high - 1, maxIndex);
-  while (left <= right) {
-    const mid = left + Math.floor((right - left) / 2);
-    if (await existsAt(mid)) {
-      low = mid;
-      left = mid + 1;
-    } else {
-      right = mid - 1;
-    }
-  }
-  return low;
-}
-function assertIndexedSocIndex(index, label = "index") {
-  if (!Number.isSafeInteger(index) || index < 0) {
-    throw new Error(`Indexed SOC ${label} must be a non-negative safe integer`);
-  }
-}
-function assertIndexedSocLimit(limit, label = "limit") {
-  if (!Number.isSafeInteger(limit) || limit < 0) {
-    throw new Error(`Indexed SOC ${label} must be a non-negative safe integer`);
-  }
-}
-
 // src/hash-chain.ts
 var DEFAULT_HASH_CHAIN_NAMESPACE = "swarm-kit:hash-chain:v1";
-var MAX_APPEND_ATTEMPTS = 3;
 function createHashChain(provider, options) {
   const namespace = options.namespace ?? DEFAULT_HASH_CHAIN_NAMESPACE;
-  async function getOwner() {
-    return (await getSigningIdentity(provider)).owner;
-  }
-  function entryIdentifier(index) {
-    assertIndexedSocIndex(index, "hash chain index");
-    return deriveIdentifier([namespace, options.topic, "entry", index]);
-  }
+  const stream = createIndexedSocStream(provider, {
+    namespace,
+    parts: [options.topic],
+    entryTag: "entry",
+    label: "hash chain",
+    parseEnvelope: (value, context) => {
+      const envelope = parseEntryEnvelope(value, options.topic);
+      if (envelope.index !== context.index) {
+        throw new Error(`Hash chain entry index mismatch for ${context.reference}`);
+      }
+      return envelope;
+    },
+    sameEnvelope: sameEnvelope2
+  });
   async function hydrateEntry(record) {
     const payload = await readObjectJson(provider, record.envelope.payloadReference);
     return {
@@ -865,91 +1051,50 @@ function createHashChain(provider, options) {
       payload
     };
   }
-  async function readEntryRecord(owner, index) {
-    assertIndexedSocIndex(index, "hash chain index");
-    try {
-      const identifier = entryIdentifier(index);
-      const soc = await readSocBytesByOwnerAndIdentifier(provider, owner, identifier);
-      const envelope = parseEntryEnvelope(bytesToJson(soc.bytes), options.topic);
-      if (envelope.index !== index) {
-        throw new Error(`Hash chain entry index mismatch for ${soc.reference}`);
-      }
-      if (soc.identifier.toLowerCase() !== identifier.toLowerCase()) {
-        throw new Error(`Hash chain identifier mismatch for ${soc.reference}`);
-      }
-      return { envelope, soc };
-    } catch (error) {
-      if (isSwarmReason(error, "chunk_not_found")) return null;
-      throw error;
-    }
-  }
   async function readEntryByAddress(reference, owner) {
     const soc = await readSocBytesByAddress(provider, reference);
     if (soc.owner.toLowerCase() !== owner.toLowerCase()) {
       throw new Error(`Hash chain owner mismatch for ${reference}`);
     }
     const envelope = parseEntryEnvelope(bytesToJson(soc.bytes), options.topic);
-    if (soc.identifier.toLowerCase() !== entryIdentifier(envelope.index).toLowerCase()) {
+    if (soc.identifier.toLowerCase() !== stream.entryIdentifier(envelope.index).toLowerCase()) {
       throw new Error(`Hash chain identifier mismatch for ${reference}`);
     }
     return hydrateEntry({ envelope, soc });
   }
   async function readAt(owner, index) {
-    const record = await readEntryRecord(owner, index);
+    const record = await stream.readRecord(owner, index);
     return record ? hydrateEntry(record) : null;
   }
-  async function findLatestIndex(owner) {
-    return findLatestContiguousIndex(async (index) => await readEntryRecord(owner, index) !== null);
-  }
-  async function readLatestRecord(owner) {
-    const index = await findLatestIndex(owner);
-    return index < 0 ? null : readEntryRecord(owner, index);
-  }
   async function readHead(owner) {
-    const record = await readLatestRecord(owner);
+    const record = await stream.readLatestRecord(owner);
     return record ? hydrateEntry(record) : null;
   }
   return {
     topic: options.topic,
-    entryIdentifier,
-    getOwner,
+    entryIdentifier: stream.entryIdentifier,
+    getOwner: stream.getOwner,
     async append(payload, appendOptions = {}) {
-      const owner = await getOwner();
       const publishedPayload = await publishObjectJson(provider, payload);
       const writtenAt = new Date(appendOptions.at ?? Date.now()).toISOString();
-      let lastCollision = null;
-      for (let attempt = 0; attempt < MAX_APPEND_ATTEMPTS; attempt += 1) {
-        const current = await readLatestRecord(owner);
-        const index = current ? current.envelope.index + 1 : 0;
-        const previousReference = current?.soc.reference ?? null;
-        const envelope = {
-          version: 1,
-          type: "swarm-kit:hash-chain-entry",
-          topic: options.topic,
-          index,
-          previousReference,
-          payloadReference: publishedPayload.reference,
-          payloadSize: publishedPayload.size,
-          writtenAt
-        };
-        const identifier = entryIdentifier(index);
-        const entryWrite = await writeSocJson(provider, identifier, envelope);
-        const stored = await readEntryRecord(owner, index);
-        if (stored && sameEntryEnvelope(stored.envelope, envelope)) {
-          return {
-            ...envelope,
-            owner: entryWrite.owner,
-            identifier: entryWrite.identifier,
-            reference: entryWrite.reference,
-            payload,
-            entryWrite
-          };
-        }
-        lastCollision = new SwarmKitError(`Hash chain append collision at index ${index}`, {
-          reason: "soc_write_collision"
-        });
-      }
-      throw lastCollision ?? new SwarmKitError("Hash chain append failed", { reason: "soc_write_collision" });
+      const appended = await stream.append(({ index, previousReference }) => ({
+        version: 1,
+        type: "swarm-kit:hash-chain-entry",
+        topic: options.topic,
+        index,
+        previousReference,
+        payloadReference: publishedPayload.reference,
+        payloadSize: publishedPayload.size,
+        writtenAt
+      }));
+      return {
+        ...appended.envelope,
+        owner: appended.owner,
+        identifier: appended.identifier,
+        reference: appended.reference,
+        payload,
+        entryWrite: appended.entryWrite
+      };
     },
     readHead,
     readAt,
@@ -957,7 +1102,7 @@ function createHashChain(provider, options) {
       const limit = readOptions.limit ?? 10;
       assertIndexedSocLimit(limit, "hash chain read limit");
       if (limit === 0) return [];
-      const latest = await readLatestRecord(owner);
+      const latest = await stream.readLatestRecord(owner);
       if (!latest) return [];
       const entries = [];
       let current = await hydrateEntry(latest);
@@ -975,14 +1120,13 @@ function parseEntryEnvelope(value, topic) {
   }
   return value;
 }
-function sameEntryEnvelope(a, b) {
+function sameEnvelope2(a, b) {
   return a.version === b.version && a.type === b.type && a.topic === b.topic && a.index === b.index && a.previousReference === b.previousReference && a.payloadReference === b.payloadReference && a.payloadSize === b.payloadSize && a.writtenAt === b.writtenAt;
 }
 
 // src/multi-writer-feed.ts
 var DEFAULT_MULTI_WRITER_NAMESPACE = "swarm-kit:multi-writer-feed:v1";
 var DEFAULT_WRITER_ID = "default";
-var MAX_APPEND_ATTEMPTS2 = 3;
 function createMultiWriterFeed(provider, options) {
   const namespace = options.namespace ?? DEFAULT_MULTI_WRITER_NAMESPACE;
   const localWriterId = options.writerId ?? DEFAULT_WRITER_ID;
@@ -990,12 +1134,22 @@ function createMultiWriterFeed(provider, options) {
     if (!writerId.trim()) throw new Error("Multi-writer feed writerId must not be empty");
     return writerId;
   }
-  function entryIdentifier(index, writerId = localWriterId) {
-    assertIndexedSocIndex(index, "multi-writer feed index");
-    return deriveIdentifier([namespace, options.topic, normalizeWriterId(writerId), "entry", index]);
-  }
-  async function getOwner() {
-    return (await getSigningIdentity(provider)).owner;
+  function streamFor(writerId = localWriterId) {
+    const normalizedWriterId = normalizeWriterId(writerId);
+    return createIndexedSocStream(provider, {
+      namespace,
+      parts: [options.topic, normalizedWriterId],
+      entryTag: "entry",
+      label: "multi-writer feed",
+      parseEnvelope: (value, context) => {
+        const envelope = parseEntryEnvelope2(value, options.topic, normalizedWriterId);
+        if (envelope.index !== context.index) {
+          throw new Error(`Multi-writer feed entry index mismatch for ${context.reference}`);
+        }
+        return envelope;
+      },
+      sameEnvelope: sameEnvelope3
+    });
   }
   async function hydrateEntry(record) {
     const payload = await readObjectJson(provider, record.envelope.payloadReference);
@@ -1007,53 +1161,28 @@ function createMultiWriterFeed(provider, options) {
       payload
     };
   }
-  async function readEntryRecord(owner, index, writerId) {
-    assertIndexedSocIndex(index, "multi-writer feed index");
-    try {
-      const identifier = entryIdentifier(index, writerId);
-      const soc = await readSocBytesByOwnerAndIdentifier(provider, owner, identifier);
-      const envelope = parseEntryEnvelope2(bytesToJson(soc.bytes), options.topic, writerId);
-      if (envelope.index !== index) {
-        throw new Error(`Multi-writer feed entry index mismatch for ${soc.reference}`);
-      }
-      if (soc.identifier.toLowerCase() !== identifier.toLowerCase()) {
-        throw new Error(`Multi-writer feed identifier mismatch for ${soc.reference}`);
-      }
-      return { envelope, soc };
-    } catch (error) {
-      if (isSwarmReason(error, "chunk_not_found")) return null;
-      throw error;
-    }
-  }
   async function readEntryByAddress(reference, owner, writerId) {
     const soc = await readSocBytesByAddress(provider, reference);
     if (soc.owner.toLowerCase() !== owner.toLowerCase()) {
       throw new Error(`Multi-writer feed owner mismatch for ${reference}`);
     }
     const envelope = parseEntryEnvelope2(bytesToJson(soc.bytes), options.topic, writerId);
-    if (soc.identifier.toLowerCase() !== entryIdentifier(envelope.index, writerId).toLowerCase()) {
+    if (soc.identifier.toLowerCase() !== streamFor(writerId).entryIdentifier(envelope.index).toLowerCase()) {
       throw new Error(`Multi-writer feed identifier mismatch for ${reference}`);
     }
     return hydrateEntry({ envelope, soc });
   }
   async function readAt(owner, index, readOptions = {}) {
     const writerId = normalizeWriterId(readOptions.writerId);
-    const record = await readEntryRecord(owner, index, writerId);
+    const record = await streamFor(writerId).readRecord(owner, index);
     return record ? hydrateEntry(record) : null;
-  }
-  async function findLatestIndex(owner, writerId) {
-    return findLatestContiguousIndex(async (index) => await readEntryRecord(owner, index, writerId) !== null);
-  }
-  async function readLatestRecord(owner, writerId) {
-    const index = await findLatestIndex(owner, writerId);
-    return index < 0 ? null : readEntryRecord(owner, index, writerId);
   }
   async function readWriter(owner, readOptions = {}) {
     const writerId = normalizeWriterId(readOptions.writerId);
     const limit = readOptions.limit ?? 10;
     assertIndexedSocLimit(limit, "multi-writer feed read limit");
     if (limit === 0) return [];
-    const latest = await readLatestRecord(owner, writerId);
+    const latest = await streamFor(writerId).readLatestRecord(owner);
     if (!latest) return [];
     const entries = [];
     let current = await hydrateEntry(latest);
@@ -1066,45 +1195,30 @@ function createMultiWriterFeed(provider, options) {
   return {
     topic: options.topic,
     writerId: localWriterId,
-    entryIdentifier,
-    getOwner,
+    entryIdentifier: (index, writerId = localWriterId) => streamFor(writerId).entryIdentifier(index),
+    getOwner: streamFor(localWriterId).getOwner,
     async append(payload, appendOptions = {}) {
-      const owner = await getOwner();
       const publishedPayload = await publishObjectJson(provider, payload);
       const writtenAt = new Date(appendOptions.at ?? Date.now()).toISOString();
-      let lastCollision = null;
-      for (let attempt = 0; attempt < MAX_APPEND_ATTEMPTS2; attempt += 1) {
-        const current = await readLatestRecord(owner, localWriterId);
-        const index = current ? current.envelope.index + 1 : 0;
-        const previousReference = current?.soc.reference ?? null;
-        const envelope = {
-          version: 1,
-          type: "swarm-kit:multi-writer-feed-entry",
-          topic: options.topic,
-          writerId: localWriterId,
-          index,
-          previousReference,
-          payloadReference: publishedPayload.reference,
-          payloadSize: publishedPayload.size,
-          writtenAt
-        };
-        const entryWrite = await writeSocJson(provider, entryIdentifier(index), envelope);
-        const stored = await readEntryRecord(owner, index, localWriterId);
-        if (stored && sameEntryEnvelope2(stored.envelope, envelope)) {
-          return {
-            ...envelope,
-            owner: entryWrite.owner,
-            identifier: entryWrite.identifier,
-            reference: entryWrite.reference,
-            payload,
-            entryWrite
-          };
-        }
-        lastCollision = new SwarmKitError(`Multi-writer feed append collision at index ${index}`, {
-          reason: "soc_write_collision"
-        });
-      }
-      throw lastCollision ?? new SwarmKitError("Multi-writer feed append failed", { reason: "soc_write_collision" });
+      const appended = await streamFor(localWriterId).append(({ index, previousReference }) => ({
+        version: 1,
+        type: "swarm-kit:multi-writer-feed-entry",
+        topic: options.topic,
+        writerId: localWriterId,
+        index,
+        previousReference,
+        payloadReference: publishedPayload.reference,
+        payloadSize: publishedPayload.size,
+        writtenAt
+      }));
+      return {
+        ...appended.envelope,
+        owner: appended.owner,
+        identifier: appended.identifier,
+        reference: appended.reference,
+        payload,
+        entryWrite: appended.entryWrite
+      };
     },
     readAt,
     readWriter,
@@ -1131,7 +1245,7 @@ function parseEntryEnvelope2(value, topic, writerId) {
   }
   return value;
 }
-function sameEntryEnvelope2(a, b) {
+function sameEnvelope3(a, b) {
   return a.version === b.version && a.type === b.type && a.topic === b.topic && a.writerId === b.writerId && a.index === b.index && a.previousReference === b.previousReference && a.payloadReference === b.payloadReference && a.payloadSize === b.payloadSize && a.writtenAt === b.writtenAt;
 }
 function compareEntriesNewestFirst(a, b) {
@@ -1179,6 +1293,8 @@ function createSwarmKit(provider = getWindowSwarm()) {
   };
   const did = {
     documentIdentifier: didDocumentIdentifier,
+    revisionIdentifier: didDocumentRevisionIdentifier,
+    create: (options = {}) => createDidDocument(provider, options),
     writeDocument: writeDidDocument.bind(null, provider),
     readDocument: readDidDocument.bind(null, provider)
   };
@@ -1221,6 +1337,8 @@ function createSwarmKit(provider = getWindowSwarm()) {
 export {
   SwarmKitError,
   assertHex,
+  assertIndexedSocIndex,
+  assertIndexedSocLimit,
   base64ToBytes,
   bytesToBase64,
   bytesToHex,
@@ -1228,13 +1346,17 @@ export {
   bytesToUtf8,
   callSwarm,
   concatBytes,
+  createDidDocument,
   createEpochFeed,
   createHashChain,
+  createIndexedSocStream,
   createMultiWriterFeed,
   createSwarmKit,
   deriveIdentifier,
   detectWindowSwarm,
   didDocumentIdentifier,
+  didDocumentRevisionIdentifier,
+  findLatestContiguousIndex,
   getSigningIdentity,
   getSwarmErrorReason,
   getWindowSwarm,

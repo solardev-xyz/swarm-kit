@@ -208,6 +208,7 @@
         <div class="actions">
           <button class="requires-provider" id="did-write" disabled>Write Document</button>
           <button class="requires-provider secondary" id="did-read" disabled>Read Own</button>
+          <button class="requires-provider secondary" id="did-history" disabled>Read History</button>
         </div>
       </div>
       <pre id="did-output" class="result">-</pre>
@@ -458,6 +459,14 @@
       $('did-read').onclick = async () => {
         try {
           show(outputs.did, await kit.did.readDocument(await ensureOwner()));
+        } catch (error) {
+          showError(outputs.did, error);
+        }
+      };
+
+      $('did-history').onclick = async () => {
+        try {
+          show(outputs.did, await kit.did.create().readHistory(await ensureOwner(), { limit: 10 }));
         } catch (error) {
           showError(outputs.did, error);
         }

@@ -6,6 +6,7 @@ export * from './epoch-feed.js';
 export * from './errors.js';
 export * from './hash-chain.js';
 export * from './identifiers.js';
+export * from './indexed-soc.js';
 export * from './multi-writer-feed.js';
 export * from './objects.js';
 export * from './provider.js';

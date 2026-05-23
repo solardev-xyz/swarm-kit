@@ -1,15 +1,7 @@
 import { bytesToJson } from './bytes.js';
-import { SwarmKitError, isSwarmReason } from './errors.js';
-import { deriveIdentifier } from './identifiers.js';
-import { assertIndexedSocIndex, assertIndexedSocLimit, findLatestContiguousIndex } from './indexed-soc.js';
+import { createIndexedSocStream, assertIndexedSocLimit, type IndexedSocRecord } from './indexed-soc.js';
 import { publishObjectJson, readObjectJson } from './objects.js';
-import {
-  getSigningIdentity,
-  readSocBytesByAddress,
-  readSocBytesByOwnerAndIdentifier,
-  writeSocJson,
-  type ReadSocBytesResult,
-} from './soc.js';
+import { readSocBytesByAddress } from './soc.js';
 import type { SwarmProvider, SwarmWriteSingleOwnerChunkResult } from './provider.js';
 
 export interface HashChainOptions {
@@ -57,30 +49,29 @@ export interface HashChain<T = unknown> {
   readLatest(owner: string, options?: HashChainReadOptions): Promise<HashChainEntry<T>[]>;
 }
 
-interface HashChainEntryRecord {
-  envelope: HashChainEntryEnvelope;
-  soc: ReadSocBytesResult;
-}
-
 const DEFAULT_HASH_CHAIN_NAMESPACE = 'swarm-kit:hash-chain:v1';
-const MAX_APPEND_ATTEMPTS = 3;
 
 export function createHashChain<T = unknown>(
   provider: SwarmProvider,
   options: HashChainOptions,
 ): HashChain<T> {
   const namespace = options.namespace ?? DEFAULT_HASH_CHAIN_NAMESPACE;
+  const stream = createIndexedSocStream<HashChainEntryEnvelope>(provider, {
+    namespace,
+    parts: [options.topic],
+    entryTag: 'entry',
+    label: 'hash chain',
+    parseEnvelope: (value, context) => {
+      const envelope = parseEntryEnvelope(value, options.topic);
+      if (envelope.index !== context.index) {
+        throw new Error(`Hash chain entry index mismatch for ${context.reference}`);
+      }
+      return envelope;
+    },
+    sameEnvelope,
+  });
 
-  async function getOwner(): Promise<string> {
-    return (await getSigningIdentity(provider)).owner;
-  }
-
-  function entryIdentifier(index: number): string {
-    assertIndexedSocIndex(index, 'hash chain index');
-    return deriveIdentifier([namespace, options.topic, 'entry', index]);
-  }
-
-  async function hydrateEntry(record: HashChainEntryRecord): Promise<HashChainEntry<T>> {
+  async function hydrateEntry(record: IndexedSocRecord<HashChainEntryEnvelope>): Promise<HashChainEntry<T>> {
     const payload = await readObjectJson<T>(provider, record.envelope.payloadReference);
     return {
       ...record.envelope,
@@ -91,25 +82,6 @@ export function createHashChain<T = unknown>(
     };
   }
 
-  async function readEntryRecord(owner: string, index: number): Promise<HashChainEntryRecord | null> {
-    assertIndexedSocIndex(index, 'hash chain index');
-    try {
-      const identifier = entryIdentifier(index);
-      const soc = await readSocBytesByOwnerAndIdentifier(provider, owner, identifier);
-      const envelope = parseEntryEnvelope(bytesToJson<HashChainEntryEnvelope>(soc.bytes), options.topic);
-      if (envelope.index !== index) {
-        throw new Error(`Hash chain entry index mismatch for ${soc.reference}`);
-      }
-      if (soc.identifier.toLowerCase() !== identifier.toLowerCase()) {
-        throw new Error(`Hash chain identifier mismatch for ${soc.reference}`);
-      }
-      return { envelope, soc };
-    } catch (error) {
-      if (isSwarmReason(error, 'chunk_not_found')) return null;
-      throw error;
-    }
-  }
-
   async function readEntryByAddress(reference: string, owner: string): Promise<HashChainEntry<T>> {
     const soc = await readSocBytesByAddress(provider, reference);
     if (soc.owner.toLowerCase() !== owner.toLowerCase()) {
@@ -117,7 +89,7 @@ export function createHashChain<T = unknown>(
     }
 
     const envelope = parseEntryEnvelope(bytesToJson<HashChainEntryEnvelope>(soc.bytes), options.topic);
-    if (soc.identifier.toLowerCase() !== entryIdentifier(envelope.index).toLowerCase()) {
+    if (soc.identifier.toLowerCase() !== stream.entryIdentifier(envelope.index).toLowerCase()) {
       throw new Error(`Hash chain identifier mismatch for ${reference}`);
     }
 
@@ -125,39 +97,23 @@ export function createHashChain<T = unknown>(
   }
 
   async function readAt(owner: string, index: number): Promise<HashChainEntry<T> | null> {
-    const record = await readEntryRecord(owner, index);
+    const record = await stream.readRecord(owner, index);
     return record ? hydrateEntry(record) : null;
   }
 
-  async function findLatestIndex(owner: string): Promise<number> {
-    return findLatestContiguousIndex(async index => (await readEntryRecord(owner, index)) !== null);
-  }
-
-  async function readLatestRecord(owner: string): Promise<HashChainEntryRecord | null> {
-    const index = await findLatestIndex(owner);
-    return index < 0 ? null : readEntryRecord(owner, index);
-  }
-
   async function readHead(owner: string): Promise<HashChainEntry<T> | null> {
-    const record = await readLatestRecord(owner);
+    const record = await stream.readLatestRecord(owner);
     return record ? hydrateEntry(record) : null;
   }
 
   return {
     topic: options.topic,
-    entryIdentifier,
-    getOwner,
+    entryIdentifier: stream.entryIdentifier,
+    getOwner: stream.getOwner,
     async append(payload, appendOptions = {}) {
-      const owner = await getOwner();
       const publishedPayload = await publishObjectJson(provider, payload);
       const writtenAt = new Date(appendOptions.at ?? Date.now()).toISOString();
-
-      let lastCollision: SwarmKitError | null = null;
-      for (let attempt = 0; attempt < MAX_APPEND_ATTEMPTS; attempt += 1) {
-        const current = await readLatestRecord(owner);
-        const index = current ? current.envelope.index + 1 : 0;
-        const previousReference = current?.soc.reference ?? null;
-        const envelope: HashChainEntryEnvelope = {
+      const appended = await stream.append(({ index, previousReference }) => ({
           version: 1,
           type: 'swarm-kit:hash-chain-entry',
           topic: options.topic,
@@ -166,28 +122,15 @@ export function createHashChain<T = unknown>(
           payloadReference: publishedPayload.reference,
           payloadSize: publishedPayload.size,
           writtenAt,
-        };
-
-        const identifier = entryIdentifier(index);
-        const entryWrite = await writeSocJson(provider, identifier, envelope);
-        const stored = await readEntryRecord(owner, index);
-        if (stored && sameEntryEnvelope(stored.envelope, envelope)) {
-          return {
-            ...envelope,
-            owner: entryWrite.owner,
-            identifier: entryWrite.identifier,
-            reference: entryWrite.reference,
-            payload,
-            entryWrite,
-          };
-        }
-
-        lastCollision = new SwarmKitError(`Hash chain append collision at index ${index}`, {
-          reason: 'soc_write_collision',
-        });
-      }
-
-      throw lastCollision ?? new SwarmKitError('Hash chain append failed', { reason: 'soc_write_collision' });
+      }));
+      return {
+        ...appended.envelope,
+        owner: appended.owner,
+        identifier: appended.identifier,
+        reference: appended.reference,
+        payload,
+        entryWrite: appended.entryWrite,
+      };
     },
     readHead,
     readAt,
@@ -196,7 +139,7 @@ export function createHashChain<T = unknown>(
       assertIndexedSocLimit(limit, 'hash chain read limit');
       if (limit === 0) return [];
 
-      const latest = await readLatestRecord(owner);
+      const latest = await stream.readLatestRecord(owner);
       if (!latest) return [];
 
       const entries: HashChainEntry<T>[] = [];
@@ -231,7 +174,7 @@ function parseEntryEnvelope(value: HashChainEntryEnvelope, topic: string): HashC
   return value;
 }
 
-function sameEntryEnvelope(a: HashChainEntryEnvelope, b: HashChainEntryEnvelope): boolean {
+function sameEnvelope(a: HashChainEntryEnvelope, b: HashChainEntryEnvelope): boolean {
   return (
     a.version === b.version &&
     a.type === b.type &&

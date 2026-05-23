@@ -1,15 +1,7 @@
 import { bytesToJson } from './bytes.js';
-import { SwarmKitError, isSwarmReason } from './errors.js';
-import { deriveIdentifier } from './identifiers.js';
-import { assertIndexedSocIndex, assertIndexedSocLimit, findLatestContiguousIndex } from './indexed-soc.js';
+import { createIndexedSocStream, assertIndexedSocLimit, type IndexedSocRecord } from './indexed-soc.js';
 import { publishObjectJson, readObjectJson } from './objects.js';
-import {
-  getSigningIdentity,
-  readSocBytesByAddress,
-  readSocBytesByOwnerAndIdentifier,
-  writeSocJson,
-  type ReadSocBytesResult,
-} from './soc.js';
+import { readSocBytesByAddress } from './soc.js';
 import type { SwarmProvider, SwarmWriteSingleOwnerChunkResult } from './provider.js';
 
 export interface MultiWriterFeedOptions {
@@ -75,14 +67,8 @@ export interface MultiWriterFeed<T = unknown> {
   readLatest(writers: readonly MultiWriterFeedWriter[], options?: MultiWriterFeedReadLatestOptions): Promise<MultiWriterFeedEntry<T>[]>;
 }
 
-interface MultiWriterFeedEntryRecord {
-  envelope: MultiWriterFeedEntryEnvelope;
-  soc: ReadSocBytesResult;
-}
-
 const DEFAULT_MULTI_WRITER_NAMESPACE = 'swarm-kit:multi-writer-feed:v1';
 const DEFAULT_WRITER_ID = 'default';
-const MAX_APPEND_ATTEMPTS = 3;
 
 export function createMultiWriterFeed<T = unknown>(
   provider: SwarmProvider,
@@ -96,16 +82,25 @@ export function createMultiWriterFeed<T = unknown>(
     return writerId;
   }
 
-  function entryIdentifier(index: number, writerId = localWriterId): string {
-    assertIndexedSocIndex(index, 'multi-writer feed index');
-    return deriveIdentifier([namespace, options.topic, normalizeWriterId(writerId), 'entry', index]);
+  function streamFor(writerId = localWriterId) {
+    const normalizedWriterId = normalizeWriterId(writerId);
+    return createIndexedSocStream<MultiWriterFeedEntryEnvelope>(provider, {
+      namespace,
+      parts: [options.topic, normalizedWriterId],
+      entryTag: 'entry',
+      label: 'multi-writer feed',
+      parseEnvelope: (value, context) => {
+        const envelope = parseEntryEnvelope(value, options.topic, normalizedWriterId);
+        if (envelope.index !== context.index) {
+          throw new Error(`Multi-writer feed entry index mismatch for ${context.reference}`);
+        }
+        return envelope;
+      },
+      sameEnvelope,
+    });
   }
 
-  async function getOwner(): Promise<string> {
-    return (await getSigningIdentity(provider)).owner;
-  }
-
-  async function hydrateEntry(record: MultiWriterFeedEntryRecord): Promise<MultiWriterFeedEntry<T>> {
+  async function hydrateEntry(record: IndexedSocRecord<MultiWriterFeedEntryEnvelope>): Promise<MultiWriterFeedEntry<T>> {
     const payload = await readObjectJson<T>(provider, record.envelope.payloadReference);
     return {
       ...record.envelope,
@@ -114,29 +109,6 @@ export function createMultiWriterFeed<T = unknown>(
       reference: record.soc.reference,
       payload,
     };
-  }
-
-  async function readEntryRecord(
-    owner: string,
-    index: number,
-    writerId: string,
-  ): Promise<MultiWriterFeedEntryRecord | null> {
-    assertIndexedSocIndex(index, 'multi-writer feed index');
-    try {
-      const identifier = entryIdentifier(index, writerId);
-      const soc = await readSocBytesByOwnerAndIdentifier(provider, owner, identifier);
-      const envelope = parseEntryEnvelope(bytesToJson<MultiWriterFeedEntryEnvelope>(soc.bytes), options.topic, writerId);
-      if (envelope.index !== index) {
-        throw new Error(`Multi-writer feed entry index mismatch for ${soc.reference}`);
-      }
-      if (soc.identifier.toLowerCase() !== identifier.toLowerCase()) {
-        throw new Error(`Multi-writer feed identifier mismatch for ${soc.reference}`);
-      }
-      return { envelope, soc };
-    } catch (error) {
-      if (isSwarmReason(error, 'chunk_not_found')) return null;
-      throw error;
-    }
   }
 
   async function readEntryByAddress(
@@ -150,7 +122,7 @@ export function createMultiWriterFeed<T = unknown>(
     }
 
     const envelope = parseEntryEnvelope(bytesToJson<MultiWriterFeedEntryEnvelope>(soc.bytes), options.topic, writerId);
-    if (soc.identifier.toLowerCase() !== entryIdentifier(envelope.index, writerId).toLowerCase()) {
+    if (soc.identifier.toLowerCase() !== streamFor(writerId).entryIdentifier(envelope.index).toLowerCase()) {
       throw new Error(`Multi-writer feed identifier mismatch for ${reference}`);
     }
 
@@ -163,17 +135,8 @@ export function createMultiWriterFeed<T = unknown>(
     readOptions: MultiWriterFeedReadAtOptions = {},
   ): Promise<MultiWriterFeedEntry<T> | null> {
     const writerId = normalizeWriterId(readOptions.writerId);
-    const record = await readEntryRecord(owner, index, writerId);
+    const record = await streamFor(writerId).readRecord(owner, index);
     return record ? hydrateEntry(record) : null;
-  }
-
-  async function findLatestIndex(owner: string, writerId: string): Promise<number> {
-    return findLatestContiguousIndex(async index => (await readEntryRecord(owner, index, writerId)) !== null);
-  }
-
-  async function readLatestRecord(owner: string, writerId: string): Promise<MultiWriterFeedEntryRecord | null> {
-    const index = await findLatestIndex(owner, writerId);
-    return index < 0 ? null : readEntryRecord(owner, index, writerId);
   }
 
   async function readWriter(owner: string, readOptions: MultiWriterFeedReadWriterOptions = {}): Promise<MultiWriterFeedEntry<T>[]> {
@@ -182,7 +145,7 @@ export function createMultiWriterFeed<T = unknown>(
     assertIndexedSocLimit(limit, 'multi-writer feed read limit');
     if (limit === 0) return [];
 
-    const latest = await readLatestRecord(owner, writerId);
+    const latest = await streamFor(writerId).readLatestRecord(owner);
     if (!latest) return [];
 
     const entries: MultiWriterFeedEntry<T>[] = [];
@@ -199,19 +162,12 @@ export function createMultiWriterFeed<T = unknown>(
   return {
     topic: options.topic,
     writerId: localWriterId,
-    entryIdentifier,
-    getOwner,
+    entryIdentifier: (index, writerId = localWriterId) => streamFor(writerId).entryIdentifier(index),
+    getOwner: streamFor(localWriterId).getOwner,
     async append(payload, appendOptions = {}) {
-      const owner = await getOwner();
       const publishedPayload = await publishObjectJson(provider, payload);
       const writtenAt = new Date(appendOptions.at ?? Date.now()).toISOString();
-
-      let lastCollision: SwarmKitError | null = null;
-      for (let attempt = 0; attempt < MAX_APPEND_ATTEMPTS; attempt += 1) {
-        const current = await readLatestRecord(owner, localWriterId);
-        const index = current ? current.envelope.index + 1 : 0;
-        const previousReference = current?.soc.reference ?? null;
-        const envelope: MultiWriterFeedEntryEnvelope = {
+      const appended = await streamFor(localWriterId).append(({ index, previousReference }) => ({
           version: 1,
           type: 'swarm-kit:multi-writer-feed-entry',
           topic: options.topic,
@@ -221,27 +177,15 @@ export function createMultiWriterFeed<T = unknown>(
           payloadReference: publishedPayload.reference,
           payloadSize: publishedPayload.size,
           writtenAt,
-        };
-
-        const entryWrite = await writeSocJson(provider, entryIdentifier(index), envelope);
-        const stored = await readEntryRecord(owner, index, localWriterId);
-        if (stored && sameEntryEnvelope(stored.envelope, envelope)) {
-          return {
-            ...envelope,
-            owner: entryWrite.owner,
-            identifier: entryWrite.identifier,
-            reference: entryWrite.reference,
-            payload,
-            entryWrite,
-          };
-        }
-
-        lastCollision = new SwarmKitError(`Multi-writer feed append collision at index ${index}`, {
-          reason: 'soc_write_collision',
-        });
-      }
-
-      throw lastCollision ?? new SwarmKitError('Multi-writer feed append failed', { reason: 'soc_write_collision' });
+      }));
+      return {
+        ...appended.envelope,
+        owner: appended.owner,
+        identifier: appended.identifier,
+        reference: appended.reference,
+        payload,
+        entryWrite: appended.entryWrite,
+      };
     },
     readAt,
     readWriter,
@@ -292,7 +236,7 @@ function parseEntryEnvelope(
   return value;
 }
 
-function sameEntryEnvelope(a: MultiWriterFeedEntryEnvelope, b: MultiWriterFeedEntryEnvelope): boolean {
+function sameEnvelope(a: MultiWriterFeedEntryEnvelope, b: MultiWriterFeedEntryEnvelope): boolean {
   return (
     a.version === b.version &&
     a.type === b.type &&

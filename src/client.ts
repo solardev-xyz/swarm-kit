@@ -1,5 +1,5 @@
 import { publishBytes, publishJson, publishText, readBytes, readJson, readText } from './chunks.js';
-import { didDocumentIdentifier, readDidDocument, writeDidDocument } from './did.js';
+import { createDidDocument, didDocumentIdentifier, didDocumentRevisionIdentifier, readDidDocument, writeDidDocument } from './did.js';
 import { createEpochFeed } from './epoch-feed.js';
 import { createHashChain } from './hash-chain.js';
 import { createMultiWriterFeed } from './multi-writer-feed.js';
@@ -52,6 +52,8 @@ export function createSwarmKit(provider: SwarmProvider = getWindowSwarm()) {
   };
   const did = {
     documentIdentifier: didDocumentIdentifier,
+    revisionIdentifier: didDocumentRevisionIdentifier,
+    create: <T = unknown>(options: Parameters<typeof createDidDocument<T>>[1] = {}) => createDidDocument<T>(provider, options),
     writeDocument: writeDidDocument.bind(null, provider),
     readDocument: readDidDocument.bind(null, provider),
   };

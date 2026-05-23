@@ -78,6 +78,32 @@ identifier)` pair is undefined at the Bee/network layer, so append-only
 structures in this package use deterministic index identifiers instead of
 mutable SOC pointers.
 
+## Indexed SOC Streams
+
+Indexed SOC streams are the core write-once append pattern used by the higher
+level helpers. Each entry is written to a deterministic SOC identifier derived
+from a namespace and index. The stream discovers the latest contiguous index for
+callers.
+
+```ts
+const stream = createIndexedSocStream(window.swarm, {
+  namespace: 'my-app:events:v1',
+  parseEnvelope(value, context) {
+    if (value.index !== context.index) throw new Error('wrong index')
+    return value
+  },
+})
+
+const written = await stream.append(({ index, previousReference }) => ({
+  version: 1,
+  index,
+  previousReference,
+  value: 'hello',
+}))
+
+const latest = await stream.readLatest(written.owner)
+```
+
 ## Chunk Graph Objects
 
 Raw CAC chunks are limited to one chunk payload. Object helpers split larger
@@ -96,24 +122,29 @@ console.log(big.chunkCount, value)
 
 ## DID-Style Documents
 
-DID-style documents store the document as a chunk graph and write a small SOC
-pointer at a well-known identifier. Any reader can resolve the document from
-`(owner, identifier)`.
-
-This helper is experimental and currently best treated as a one-shot document
-write for a namespace. Raw SOC identifiers are write-once in practice, so
-updating a document should use a new namespace/version until `swarm-kit` grows a
-revisioned DID document pattern.
+DID-style documents store each document body as a chunk graph and each document
+revision as an indexed SOC entry. Readers can resolve the latest revision or
+walk document history from an owner address.
 
 ```ts
-const written = await kit.did.writeDocument({
+const profile = kit.did.create({
+  namespace: 'my-profile',
+})
+
+const first = await profile.write({
   name: 'Alice',
   services: [{ id: '#status', type: 'EpochFeed', topic: 'status' }],
 })
 
-const resolved = await kit.did.readDocument(written.owner)
+const second = await profile.write({
+  name: 'Alice',
+  status: 'online',
+})
 
-console.log(resolved.document)
+const resolved = await profile.readLatest(second.owner)
+const history = await profile.readHistory(second.owner)
+
+console.log(resolved?.document, history.map(revision => revision.revision))
 ```
 
 ## Hash Chains
@@ -190,9 +221,10 @@ This first pass includes:
 - provider adapter and `window.swarm` type surface
 - base64, UTF-8, JSON, bytes, and hex helpers
 - CAC text/JSON/bytes helpers
+- indexed SOC stream helper
 - chunk graph text/JSON/bytes helpers
 - SOC text/JSON/bytes helpers
-- DID-style document helper
+- revisioned DID-style document helper
 - single-writer hash-chain helper
 - multi-writer feed helper
 - deterministic identifier derivation using Keccak-256
