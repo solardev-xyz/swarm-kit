@@ -3,137 +3,559 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Swarm Kit Epoch Feed Smoke</title>
+  <title>Swarm Kit Playground</title>
   <style>
+    * { box-sizing: border-box; }
     body {
-      background: #101010;
-      color: #e8e8e8;
+      background: #111210;
+      color: #ece8df;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       line-height: 1.5;
-      max-width: 760px;
+      max-width: 1040px;
       margin: 0 auto;
-      padding: 32px;
+      padding: 28px;
     }
-    h1 { font-size: 22px; margin: 0 0 8px; }
-    p { color: #aaa; margin: 0 0 24px; }
+    header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+    h1 { font-size: 24px; margin: 0; }
+    .connection {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      border-bottom: 1px solid #33352f;
+      margin-bottom: 18px;
+    }
+    .tab {
+      background: transparent;
+      color: #bcb6a8;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      padding: 10px 12px;
+      margin: 0;
+    }
+    .tab.active {
+      color: #fff6e5;
+      border-bottom-color: #f59e0b;
+    }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(300px, 0.9fr);
+      gap: 18px;
+      align-items: start;
+    }
+    .field-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    label {
+      display: block;
+      color: #c9c1b3;
+      font-size: 13px;
+      font-weight: 650;
+      margin-bottom: 6px;
+    }
+    input, textarea {
+      display: block;
+      width: 100%;
+      background: #1d1e1a;
+      color: #f2eee7;
+      border: 1px solid #393b34;
+      border-radius: 8px;
+      padding: 11px 12px;
+      font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    textarea {
+      min-height: 220px;
+      resize: vertical;
+    }
     button {
-      background: #f59e0b;
-      color: white;
+      background: #d88a10;
+      color: #fff;
       border: 0;
       border-radius: 8px;
-      padding: 10px 16px;
-      font-weight: 650;
+      padding: 10px 14px;
+      font-weight: 700;
       cursor: pointer;
       margin: 0 8px 8px 0;
     }
-    button.secondary { background: #242424; border: 1px solid #3a3a3a; }
-    textarea {
-      display: block;
-      width: 100%;
-      min-height: 92px;
-      background: #1a1a1a;
-      color: #e8e8e8;
-      border: 1px solid #333;
-      border-radius: 8px;
-      padding: 12px;
-      font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
-      margin: 0 0 12px;
+    button.secondary {
+      background: #252720;
+      border: 1px solid #3a3d35;
+      color: #eee8dd;
     }
-    .status {
-      background: #1a1a1a;
-      border: 1px solid #333;
+    button:disabled {
+      background: #44463f;
+      color: #8e8b82;
+      cursor: not-allowed;
+    }
+    .actions { margin-top: 12px; }
+    .result {
+      background: #1d1e1a;
+      border: 1px solid #393b34;
       border-radius: 8px;
       padding: 12px;
       white-space: pre-wrap;
       word-break: break-word;
       font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
-      min-height: 44px;
-      margin-top: 12px;
+      min-height: 260px;
+      margin: 0;
     }
     .ok { border-color: #22c55e66; }
     .bad { border-color: #ef444466; }
+    .status {
+      width: 100%;
+      min-height: 44px;
+    }
+    @media (max-width: 800px) {
+      body { padding: 18px; }
+      header { display: block; }
+      .connection { justify-content: flex-start; margin-top: 14px; }
+      .grid, .field-row { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
-  <h1>Swarm Kit Epoch Feed Smoke</h1>
-  <p>Build first with <code>npm run build</code>, then upload this folder together with <code>dist/</code>.</p>
+  <header>
+    <h1>Swarm Kit Playground</h1>
+    <div class="connection">
+      <button id="connect" disabled>Connect</button>
+      <button id="owner" class="secondary" disabled>Owner</button>
+      <button id="capabilities" class="secondary" disabled>Capabilities</button>
+    </div>
+  </header>
 
-  <textarea id="payload">{"status":"online"}</textarea>
-  <button id="connect">Connect</button>
-  <button id="owner" class="secondary">Get Owner</button>
-  <button id="write">Write Current Hour</button>
-  <button id="read" class="secondary">Read Current Hour</button>
-  <button id="latest" class="secondary">Read Latest 24h</button>
+  <pre id="status" class="result status">Waiting for window.swarm...</pre>
 
-  <div id="status" class="status">Waiting for window.swarm...</div>
+  <nav class="tabs" aria-label="Playground sections">
+    <button class="tab active" data-panel="epoch">Epoch Feed</button>
+    <button class="tab" data-panel="objects">Objects</button>
+    <button class="tab" data-panel="did">DID Document</button>
+    <button class="tab" data-panel="hash">Hash Chain</button>
+    <button class="tab" data-panel="multi">Multi-Writer</button>
+  </nav>
+
+  <section id="panel-epoch" class="panel active">
+    <div class="grid">
+      <div>
+        <div class="field-row">
+          <div>
+            <label for="epoch-topic">Topic</label>
+            <input id="epoch-topic" value="swarm-kit-playground-status">
+          </div>
+          <div>
+            <label for="epoch-period">Period</label>
+            <input id="epoch-period" value="hour">
+          </div>
+        </div>
+        <label for="epoch-payload">Payload</label>
+        <textarea id="epoch-payload">{"status":"online"}</textarea>
+        <div class="actions">
+          <button class="requires-provider" id="epoch-write" disabled>Write Current</button>
+          <button class="requires-provider secondary" id="epoch-read" disabled>Read Current</button>
+          <button class="requires-provider secondary" id="epoch-latest" disabled>Read Latest</button>
+        </div>
+      </div>
+      <pre id="epoch-output" class="result">-</pre>
+    </div>
+  </section>
+
+  <section id="panel-objects" class="panel">
+    <div class="grid">
+      <div>
+        <label for="object-payload">JSON</label>
+        <textarea id="object-payload">{
+  "title": "large object",
+  "entries": [
+    { "index": 0, "value": "alpha" },
+    { "index": 1, "value": "beta" }
+  ]
+}</textarea>
+        <div class="actions">
+          <button class="requires-provider" id="object-publish" disabled>Publish Object</button>
+          <button class="requires-provider secondary" id="object-read" disabled>Read Last</button>
+        </div>
+      </div>
+      <pre id="object-output" class="result">-</pre>
+    </div>
+  </section>
+
+  <section id="panel-did" class="panel">
+    <div class="grid">
+      <div>
+        <label for="did-payload">Document</label>
+        <textarea id="did-payload">{
+  "name": "Alice",
+  "services": [
+    { "id": "#status", "type": "EpochFeed", "topic": "swarm-kit-playground-status" }
+  ]
+}</textarea>
+        <div class="actions">
+          <button class="requires-provider" id="did-write" disabled>Write Document</button>
+          <button class="requires-provider secondary" id="did-read" disabled>Read Own</button>
+        </div>
+      </div>
+      <pre id="did-output" class="result">-</pre>
+    </div>
+  </section>
+
+  <section id="panel-hash" class="panel">
+    <div class="grid">
+      <div>
+        <label for="hash-topic">Topic</label>
+        <input id="hash-topic" value="swarm-kit-playground-log">
+        <label for="hash-payload">Entry</label>
+        <textarea id="hash-payload">{"action":"published"}</textarea>
+        <label for="hash-index">Index</label>
+        <input id="hash-index" value="0" inputmode="numeric">
+        <div class="actions">
+          <button class="requires-provider" id="hash-append" disabled>Append</button>
+          <button class="requires-provider secondary" id="hash-read" disabled>Read Latest</button>
+          <button class="requires-provider secondary" id="hash-read-index" disabled>Read Index</button>
+        </div>
+      </div>
+      <pre id="hash-output" class="result">-</pre>
+    </div>
+  </section>
+
+  <section id="panel-multi" class="panel">
+    <div class="grid">
+      <div>
+        <div class="field-row">
+          <div>
+            <label for="multi-topic">Topic</label>
+            <input id="multi-topic" value="swarm-kit-playground-team">
+          </div>
+          <div>
+            <label for="multi-writer">Writer ID</label>
+            <input id="multi-writer" value="default">
+          </div>
+        </div>
+        <label for="multi-payload">Entry</label>
+        <textarea id="multi-payload">{"status":"online","note":"hello team"}</textarea>
+        <label for="multi-writers">Writers</label>
+        <textarea id="multi-writers" style="min-height: 86px;">[]</textarea>
+        <label for="multi-index">Index</label>
+        <input id="multi-index" value="0" inputmode="numeric">
+        <div class="actions">
+          <button class="requires-provider" id="multi-append" disabled>Append</button>
+          <button class="requires-provider secondary" id="multi-read-writer" disabled>Read Writer</button>
+          <button class="requires-provider secondary" id="multi-read-merged" disabled>Read Merged</button>
+          <button class="requires-provider secondary" id="multi-read-index" disabled>Read Index</button>
+        </div>
+      </div>
+      <pre id="multi-output" class="result">-</pre>
+    </div>
+  </section>
 
   <script type="module">
-    import { createSwarmKit } from '../../dist/index.js';
+    import { createSwarmKit, waitForSwarm } from './swarm-kit.js';
 
-    const status = document.getElementById('status');
-    const payload = document.getElementById('payload');
-    const kit = createSwarmKit(window.swarm);
-    const feed = kit.createEpochFeed({
-      topic: 'swarm-kit-smoke-status',
-      period: 'hour',
-    });
+    const $ = (id) => document.getElementById(id);
+    const providerButtons = Array.from(document.querySelectorAll('.requires-provider, #connect, #owner, #capabilities'));
+    const outputs = {
+      status: $('status'),
+      epoch: $('epoch-output'),
+      objects: $('object-output'),
+      did: $('did-output'),
+      hash: $('hash-output'),
+      multi: $('multi-output'),
+    };
+
+    let kit;
     let owner = '';
+    let lastObjectReference = '';
 
-    function show(value, ok = true) {
-      status.className = 'status ' + (ok ? 'ok' : 'bad');
-      status.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    const stringify = (value) => typeof value === 'string'
+      ? value
+      : JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? item.toString() : item, 2);
+
+    function show(target, value, ok = true) {
+      target.className = `result${target === outputs.status ? ' status' : ''} ${ok ? 'ok' : 'bad'}`;
+      target.textContent = stringify(value);
     }
 
-    function parsePayload() {
-      return JSON.parse(payload.value);
+    function showError(target, error) {
+      const reason = error?.data?.reason ? ` [${error.data.reason}]` : '';
+      show(target, `Error (${error?.code ?? '?'}${reason}): ${error?.message ?? error}`, false);
     }
 
-    document.getElementById('connect').onclick = async () => {
-      try {
-        show(await kit.requestAccess());
-      } catch (error) {
-        show(error.message, false);
-      }
-    };
+    function parseJson(id) {
+      return JSON.parse($(id).value);
+    }
 
-    document.getElementById('owner').onclick = async () => {
-      try {
-        owner = await feed.getOwner();
-        show({ owner });
-      } catch (error) {
-        show(error.message, false);
+    function parseIndex(id) {
+      const index = Number($(id).value);
+      if (!Number.isSafeInteger(index) || index < 0) {
+        throw new Error('Index must be a non-negative safe integer');
       }
-    };
+      return index;
+    }
 
-    document.getElementById('write').onclick = async () => {
-      try {
-        const result = await feed.write(parsePayload());
-        owner = result.owner;
-        show(result);
-      } catch (error) {
-        show(error.message, false);
+    function setProviderEnabled(enabled) {
+      providerButtons.forEach(button => { button.disabled = !enabled; });
+    }
+
+    async function ensureOwner() {
+      if (!owner) {
+        owner = (await kit.soc.getSigningIdentity()).owner;
       }
-    };
+      return owner;
+    }
 
-    document.getElementById('read').onclick = async () => {
-      try {
-        if (!owner) owner = await feed.getOwner();
-        show(await feed.readCurrent(owner));
-      } catch (error) {
-        show(error.message, false);
+    function epochPeriod() {
+      const raw = $('epoch-period').value.trim();
+      if (raw === 'minute' || raw === 'hour' || raw === 'day') return raw;
+      const seconds = Number(raw);
+      if (Number.isSafeInteger(seconds) && seconds > 0) return { seconds };
+      return 'hour';
+    }
+
+    function epochFeed() {
+      return kit.epochFeed.create({
+        topic: $('epoch-topic').value.trim() || 'swarm-kit-playground-status',
+        period: epochPeriod(),
+      });
+    }
+
+    function hashChain() {
+      return kit.hashChain.create({
+        topic: $('hash-topic').value.trim() || 'swarm-kit-playground-log',
+      });
+    }
+
+    function multiWriterFeed() {
+      return kit.multiWriterFeed.create({
+        topic: $('multi-topic').value.trim() || 'swarm-kit-playground-team',
+        writerId: $('multi-writer').value.trim() || 'default',
+      });
+    }
+
+    function addKnownWriter(writer) {
+      const writers = parseWriters();
+      const exists = writers.some(item =>
+        item.owner.toLowerCase() === writer.owner.toLowerCase() &&
+        (item.writerId || 'default') === (writer.writerId || 'default')
+      );
+      if (!exists) {
+        writers.push(writer);
+        $('multi-writers').value = JSON.stringify(writers, null, 2);
       }
-    };
+    }
 
-    document.getElementById('latest').onclick = async () => {
+    function parseWriters() {
+      const value = parseJson('multi-writers');
+      if (!Array.isArray(value)) throw new Error('Writers must be a JSON array');
+      return value;
+    }
+
+    function bindTabs() {
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+          const panel = tab.dataset.panel;
+          document.querySelectorAll('.tab').forEach(item => item.classList.toggle('active', item === tab));
+          document.querySelectorAll('.panel').forEach(item => item.classList.toggle('active', item.id === `panel-${panel}`));
+        });
+      });
+    }
+
+    function bindActions() {
+      $('connect').onclick = async () => {
+        try {
+          show(outputs.status, await kit.requestAccess());
+        } catch (error) {
+          showError(outputs.status, error);
+        }
+      };
+
+      $('owner').onclick = async () => {
+        try {
+          owner = await ensureOwner();
+          show(outputs.status, { owner });
+        } catch (error) {
+          showError(outputs.status, error);
+        }
+      };
+
+      $('capabilities').onclick = async () => {
+        try {
+          show(outputs.status, await kit.getCapabilities());
+        } catch (error) {
+          showError(outputs.status, error);
+        }
+      };
+
+      $('epoch-write').onclick = async () => {
+        try {
+          const result = await epochFeed().write(parseJson('epoch-payload'));
+          owner = result.owner;
+          show(outputs.epoch, result);
+        } catch (error) {
+          showError(outputs.epoch, error);
+        }
+      };
+
+      $('epoch-read').onclick = async () => {
+        try {
+          show(outputs.epoch, await epochFeed().readCurrent(await ensureOwner()));
+        } catch (error) {
+          showError(outputs.epoch, error);
+        }
+      };
+
+      $('epoch-latest').onclick = async () => {
+        try {
+          show(outputs.epoch, await epochFeed().readLatest(await ensureOwner(), { lookback: 24 }));
+        } catch (error) {
+          showError(outputs.epoch, error);
+        }
+      };
+
+      $('object-publish').onclick = async () => {
+        try {
+          const result = await kit.objects.publishJson(parseJson('object-payload'));
+          lastObjectReference = result.reference;
+          show(outputs.objects, result);
+        } catch (error) {
+          showError(outputs.objects, error);
+        }
+      };
+
+      $('object-read').onclick = async () => {
+        try {
+          if (!lastObjectReference) throw new Error('No object reference yet');
+          show(outputs.objects, await kit.objects.readJson(lastObjectReference));
+        } catch (error) {
+          showError(outputs.objects, error);
+        }
+      };
+
+      $('did-write').onclick = async () => {
+        try {
+          const result = await kit.did.writeDocument(parseJson('did-payload'));
+          owner = result.owner;
+          show(outputs.did, result);
+        } catch (error) {
+          showError(outputs.did, error);
+        }
+      };
+
+      $('did-read').onclick = async () => {
+        try {
+          show(outputs.did, await kit.did.readDocument(await ensureOwner()));
+        } catch (error) {
+          showError(outputs.did, error);
+        }
+      };
+
+      $('hash-append').onclick = async () => {
+        try {
+          const result = await hashChain().append(parseJson('hash-payload'));
+          owner = result.owner;
+          $('hash-index').value = String(result.index);
+          show(outputs.hash, result);
+        } catch (error) {
+          showError(outputs.hash, error);
+        }
+      };
+
+      $('hash-read').onclick = async () => {
+        try {
+          show(outputs.hash, await hashChain().readLatest(await ensureOwner(), { limit: 10 }));
+        } catch (error) {
+          showError(outputs.hash, error);
+        }
+      };
+
+      $('hash-read-index').onclick = async () => {
+        try {
+          show(outputs.hash, await hashChain().readAt(await ensureOwner(), parseIndex('hash-index')));
+        } catch (error) {
+          showError(outputs.hash, error);
+        }
+      };
+
+      $('multi-append').onclick = async () => {
+        try {
+          const feed = multiWriterFeed();
+          const result = await feed.append(parseJson('multi-payload'));
+          owner = result.owner;
+          $('multi-index').value = String(result.index);
+          addKnownWriter({ owner: result.owner, writerId: result.writerId });
+          show(outputs.multi, result);
+        } catch (error) {
+          showError(outputs.multi, error);
+        }
+      };
+
+      $('multi-read-writer').onclick = async () => {
+        try {
+          const feed = multiWriterFeed();
+          show(outputs.multi, await feed.readWriter(await ensureOwner(), {
+            writerId: feed.writerId,
+            limit: 10,
+          }));
+        } catch (error) {
+          showError(outputs.multi, error);
+        }
+      };
+
+      $('multi-read-index').onclick = async () => {
+        try {
+          const feed = multiWriterFeed();
+          show(outputs.multi, await feed.readAt(await ensureOwner(), parseIndex('multi-index'), {
+            writerId: feed.writerId,
+          }));
+        } catch (error) {
+          showError(outputs.multi, error);
+        }
+      };
+
+      $('multi-read-merged').onclick = async () => {
+        try {
+          show(outputs.multi, await multiWriterFeed().readLatest(parseWriters(), {
+            limitPerWriter: 10,
+            limit: 20,
+          }));
+        } catch (error) {
+          showError(outputs.multi, error);
+        }
+      };
+    }
+
+    async function init() {
+      bindTabs();
+      bindActions();
+      show(outputs.status, 'Waiting for Freedom Browser window.swarm...');
       try {
-        if (!owner) owner = await feed.getOwner();
-        show(await feed.readLatest(owner, { lookback: 24 }));
-      } catch (error) {
-        show(error.message, false);
+        const swarm = await waitForSwarm({ requireFreedomBrowser: true, timeoutMs: 2500 });
+        kit = createSwarmKit(swarm);
+        swarm.on?.('connect', data => show(outputs.status, { connected: true, origin: data?.origin }));
+        swarm.on?.('disconnect', data => show(outputs.status, { connected: false, origin: data?.origin }, false));
+        setProviderEnabled(true);
+        show(outputs.status, 'window.swarm detected');
+      } catch {
+        setProviderEnabled(false);
+        show(outputs.status, 'window.swarm not detected', false);
       }
-    };
+    }
 
-    show(window.swarm ? 'window.swarm detected' : 'window.swarm not detected', Boolean(window.swarm));
+    init();
   </script>
 </body>
 </html>

@@ -10,16 +10,31 @@ import type {
 
 export interface MockSwarmProviderOptions {
   owner?: string;
+  storage?: MockSwarmProviderStorage;
+}
+
+export interface MockSwarmProviderStorage {
+  chunks: Map<string, Uint8Array>;
+  socs: Map<string, { owner: string; identifier: string; bytes: Uint8Array }>;
+}
+
+export function createMockSwarmStorage(): MockSwarmProviderStorage {
+  return {
+    chunks: new Map(),
+    socs: new Map(),
+  };
 }
 
 export class MockSwarmProvider implements SwarmProvider {
   readonly isFreedomBrowser = true;
   readonly owner: string;
-  private readonly chunks = new Map<string, Uint8Array>();
-  private readonly socs = new Map<string, { owner: string; identifier: string; bytes: Uint8Array }>();
+  private readonly chunks: MockSwarmProviderStorage['chunks'];
+  private readonly socs: MockSwarmProviderStorage['socs'];
 
   constructor(options: MockSwarmProviderOptions = {}) {
     this.owner = options.owner ?? '0x1111111111111111111111111111111111111111';
+    this.chunks = options.storage?.chunks ?? new Map();
+    this.socs = options.storage?.socs ?? new Map();
   }
 
   async requestAccess(): Promise<{ connected: true; origin: string; capabilities: string[] }> {
@@ -69,11 +84,13 @@ export class MockSwarmProvider implements SwarmProvider {
   async writeSingleOwnerChunk(params: { identifier: string; data: string | Uint8Array | ArrayBuffer }): Promise<{ reference: string; owner: string; identifier: string }> {
     const bytes = normalizeBytes(params.data);
     const reference = this.socReference(this.owner, params.identifier);
-    this.socs.set(reference, {
-      owner: this.owner,
-      identifier: params.identifier,
-      bytes,
-    });
+    if (!this.socs.has(reference)) {
+      this.socs.set(reference, {
+        owner: this.owner,
+        identifier: params.identifier,
+        bytes,
+      });
+    }
     return {
       reference,
       owner: this.owner,

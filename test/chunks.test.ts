@@ -24,7 +24,10 @@ describe('chunk helpers', () => {
   test('client factory binds helpers to a provider', async () => {
     const kit = createSwarmKit(new MockSwarmProvider());
 
-    const published = await kit.publishText('bound provider');
-    await expect(kit.readText(published.reference)).resolves.toBe('bound provider');
+    const published = await kit.chunks.publishText('bound provider');
+    await expect(kit.chunks.readText(published.reference)).resolves.toBe('bound provider');
+
+    const aliasPublished = await kit.publishText('flat aliases still work');
+    await expect(kit.readText(aliasPublished.reference)).resolves.toBe('flat aliases still work');
   });
 });

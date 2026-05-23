@@ -18,7 +18,12 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run build:lib && npm run build:playground",
+    "build:lib": "tsc -p tsconfig.json",
+    "build:playground": "esbuild src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=examples/epoch-feed-smoke/swarm-kit.js",
+    "build:epoch-feed-smoke": "npm run build:playground",
+    "dev:playground": "node scripts/dev-epoch-feed-smoke.mjs",
+    "dev:epoch-feed-smoke": "npm run dev:playground",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -26,6 +31,7 @@
     "@noble/hashes": "^1.8.0"
   },
   "devDependencies": {
+    "esbuild": "^0.27.7",
     "typescript": "^5.8.3",
     "vitest": "^3.1.4"
   }

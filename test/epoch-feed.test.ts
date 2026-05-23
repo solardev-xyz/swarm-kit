@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { createEpochFeed } from '../src/index.js';
+import { createEpochFeed, createSwarmKit } from '../src/index.js';
 import { MockSwarmProvider } from './mock-provider.js';
 
 describe('epoch feeds', () => {
@@ -60,5 +60,18 @@ describe('epoch feeds', () => {
     });
 
     expect(latest?.value).toEqual({ status: 'online' });
+  });
+
+  test('client exposes namespaced epoch feed factory', async () => {
+    const kit = createSwarmKit(new MockSwarmProvider());
+    const feed = kit.epochFeed.create<{ status: string }>({
+      topic: 'client-status',
+      period: 'hour',
+    });
+
+    const written = await feed.write({ status: 'online' }, { at: new Date('2026-05-23T15:00:00.000Z') });
+    const read = await feed.readAt(written.owner, new Date('2026-05-23T15:30:00.000Z'));
+
+    expect(read?.value.status).toBe('online');
   });
 });

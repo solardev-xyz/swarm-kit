@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+  createSwarmKit,
   deriveIdentifier,
   getSigningIdentity,
   readSocJsonByAddress,
@@ -48,5 +49,26 @@ describe('SOC helpers', () => {
     const value = await readSocJsonByAddress<{ theme: string }>(provider, written.reference);
 
     expect(value.theme).toBe('dark');
+  });
+
+  test('mock provider keeps the first write for a repeated SOC identifier', async () => {
+    const provider = new MockSwarmProvider();
+    const identifier = deriveIdentifier(['write-once']);
+
+    const first = await writeSocJson(provider, identifier, { version: 1 });
+    const second = await writeSocJson(provider, identifier, { version: 2 });
+    const value = await readSocJsonByAddress<{ version: number }>(provider, second.reference);
+
+    expect(second.reference).toBe(first.reference);
+    expect(value.version).toBe(1);
+  });
+
+  test('client exposes namespaced SOC helpers', async () => {
+    const kit = createSwarmKit(new MockSwarmProvider());
+    const identifier = deriveIdentifier(['namespaced']);
+
+    const written = await kit.soc.writeText(identifier, 'hello namespace');
+
+    await expect(kit.soc.readTextByAddress(written.reference)).resolves.toBe('hello namespace');
   });
 });

@@ -62,13 +62,43 @@ export interface SwarmProvider {
   getSigningIdentity?: () => Promise<SwarmSigningIdentity>;
 }
 
+export interface DetectWindowSwarmOptions {
+  requireFreedomBrowser?: boolean;
+}
+
+export interface WaitForSwarmOptions extends DetectWindowSwarmOptions {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+}
+
 export function getWindowSwarm(): SwarmProvider {
-  const swarm = (globalThis as { window?: { swarm?: SwarmProvider }; swarm?: SwarmProvider }).window?.swarm
-    ?? (globalThis as { swarm?: SwarmProvider }).swarm;
+  const swarm = detectWindowSwarm();
   if (!swarm) {
     throw new Error('window.swarm provider is not available');
   }
   return swarm;
+}
+
+export function detectWindowSwarm(options: DetectWindowSwarmOptions = {}): SwarmProvider | null {
+  const swarm = (globalThis as { window?: { swarm?: SwarmProvider }; swarm?: SwarmProvider }).window?.swarm
+    ?? (globalThis as { swarm?: SwarmProvider }).swarm;
+  if (!swarm) return null;
+  if (options.requireFreedomBrowser && !swarm.isFreedomBrowser) return null;
+  return swarm;
+}
+
+export async function waitForSwarm(options: WaitForSwarmOptions = {}): Promise<SwarmProvider> {
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 50;
+  const deadline = Date.now() + timeoutMs;
+
+  do {
+    const swarm = detectWindowSwarm(options);
+    if (swarm) return swarm;
+    await sleep(Math.max(1, pollIntervalMs));
+  } while (Date.now() <= deadline);
+
+  throw new Error('window.swarm provider is not available');
 }
 
 export async function callSwarm<T>(
@@ -100,4 +130,8 @@ function directMethodName(method: string): keyof SwarmProvider | null {
     case 'swarm_getSigningIdentity': return 'getSigningIdentity';
     default: return null;
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
