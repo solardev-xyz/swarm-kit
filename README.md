@@ -10,6 +10,9 @@ limits.
 This is an early prototype. The repository is public, but the package is still
 marked `"private": true` and is not published to npm yet.
 
+`swarm-kit` targets Freedom Browser's `window.swarm` provider. It is not a Bee
+HTTP client and should not be expected to run against a plain Bee node directly.
+
 ## Development Setup
 
 ```sh
@@ -44,7 +47,8 @@ Then open `http://127.0.0.1:4173/` in Freedom Browser. Use
 ```ts
 import { createSwarmKit, waitForSwarm } from '@freedom/swarm-kit'
 
-const kit = createSwarmKit(await waitForSwarm())
+const provider = await waitForSwarm({ requireFreedomBrowser: true })
+const kit = createSwarmKit(provider)
 
 await kit.requestAccess()
 
@@ -83,12 +87,22 @@ mutable SOC pointers.
 Indexed SOC streams are the core write-once append pattern used by the higher
 level helpers. Each entry is written to a deterministic SOC identifier derived
 from a namespace and index. The stream discovers the latest contiguous index for
-callers.
+callers. Stream envelopes must expose their own `index` so reads can validate
+that the returned SOC is the exact entry requested.
 
 ```ts
+import { createIndexedSocStream } from '@freedom/swarm-kit'
+
+interface EventEntry {
+  version: 1
+  index: number
+  previousReference: string | null
+  value: string
+}
+
 const stream = createIndexedSocStream(window.swarm, {
   namespace: 'my-app:events:v1',
-  parseEnvelope(value, context) {
+  parseEnvelope(value: EventEntry, context) {
     if (value.index !== context.index) throw new Error('wrong index')
     return value
   },
@@ -146,6 +160,10 @@ const history = await profile.readHistory(second.owner)
 
 console.log(resolved?.document, history.map(revision => revision.revision))
 ```
+
+For simple callers, `kit.did.writeDocument(...)` and
+`kit.did.readDocument(owner)` are aliases for writing a new revision and reading
+the latest revision.
 
 ## Hash Chains
 
@@ -216,8 +234,6 @@ console.log(current?.value, latest?.value)
 
 ## Current Scope
 
-This first pass includes:
-
 - provider adapter and `window.swarm` type surface
 - base64, UTF-8, JSON, bytes, and hex helpers
 - CAC text/JSON/bytes helpers
@@ -235,4 +251,5 @@ Not included yet:
 
 - encryption helpers
 - CRDT conflict resolution on top of multi-writer entries
+- mailbox/inbox discovery conventions
 - Bee-compatible ACT abstractions
