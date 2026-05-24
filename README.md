@@ -178,7 +178,7 @@ const key = derived.key
 
 Public-key helpers use browser Web Crypto with P-256 ECDH, HKDF-SHA-256, and
 AES-GCM. They are for encrypting to a recipient key, not for proving who sent
-the payload. Pair them with signed/verifiable documents when identity matters.
+the payload. Pair them with signed documents when identity matters.
 
 Apps can use Swarm Kit's keypair helpers or provide their own Web Crypto
 `CryptoKey`s/JWKs.
@@ -197,6 +197,46 @@ const value = await kit.crypto.readJsonFrom(
 )
 
 console.log(value)
+```
+
+## Signed Documents
+
+Signed documents bind a JSON payload to a subject string with canonical signing
+bytes. Swarm Kit includes Web Crypto P-256 sign/verify helpers and an EIP-1193
+`personal_sign` signer adapter for wallet-bound documents. Ethereum recovery is
+provided as an adapter hook so apps can use their preferred wallet library.
+
+```ts
+const signingKey = await kit.signedDocuments.generateP256KeyPair()
+const signer = await kit.signedDocuments.createP256Signer(signingKey)
+
+const published = await kit.signedDocuments.publish({
+  encryptionPublicKey: publicKey,
+  delivery: [],
+}, {
+  subject: 'wallet:0xabc...',
+  signer,
+})
+
+const verified = await kit.signedDocuments.readAndVerify(
+  published.reference,
+  kit.signedDocuments.createP256Verifier(),
+)
+
+console.log(verified.payload)
+```
+
+For wallet signatures:
+
+```ts
+const signer = kit.signedDocuments.createEip1193PersonalSigner(window.ethereum, {
+  address: walletAddress,
+})
+
+const envelope = await kit.signedDocuments.sign(profile, {
+  subject: `wallet:${walletAddress}`,
+  signer,
+})
 ```
 
 ## DID-Style Documents
@@ -327,6 +367,7 @@ console.log(current?.value, latest?.value)
 - SOC text/JSON/bytes helpers
 - AES-GCM encrypted object helpers
 - P-256 ECDH public-key encrypted object helpers
+- signed/verifiable document envelopes
 - revisioned DID-style document helper
 - single-writer hash-chain helper
 - multi-writer feed helper
@@ -339,7 +380,6 @@ console.log(current?.value, latest?.value)
 Not included yet:
 
 - wallet-bound recipient key discovery and exchange
-- signed/verifiable document envelopes
 - CRDT conflict resolution on top of multi-writer entries
 - mailbox/inbox discovery conventions
 - Bee-compatible ACT abstractions

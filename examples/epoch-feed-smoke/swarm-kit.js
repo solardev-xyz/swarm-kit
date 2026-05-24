@@ -1691,6 +1691,251 @@ function compareEntriesNewestFirst(a, b) {
   return a.writerId.localeCompare(b.writerId);
 }
 
+// src/signed-documents.ts
+var SIGNED_DOCUMENT_PAYLOAD_TYPE = "swarm-kit:signed-document-payload";
+var SIGNED_DOCUMENT_SIGNATURE_ENCODING = "base64";
+var P256_SIGNATURE_SCHEME = "ECDSA-P256-SHA-256";
+var EIP_191_PERSONAL_SIGN_SCHEME = "EIP-191-PERSONAL-SIGN";
+var ECDSA = "ECDSA";
+var P256_NAMED_CURVE = "P-256";
+async function signDocument(payload, options) {
+  const unsigned = createSignedDocumentPayload(payload, options);
+  const bytes = signedDocumentPayloadBytes(unsigned);
+  const signature = normalizeSignatureBytes(await options.signer.sign(bytes));
+  const envelope = {
+    ...unsigned,
+    signature: {
+      scheme: options.signer.scheme,
+      signer: options.signer.id,
+      encoding: SIGNED_DOCUMENT_SIGNATURE_ENCODING,
+      value: bytesToBase64(signature)
+    }
+  };
+  if (options.signer.publicKey !== void 0) {
+    envelope.signature.publicKey = options.signer.publicKey;
+  }
+  validateSignedDocumentEnvelope(envelope);
+  return envelope;
+}
+async function verifySignedDocument(envelope, verifier) {
+  validateSignedDocumentEnvelope(envelope);
+  return verifier.verify({
+    envelope,
+    bytes: signedDocumentPayloadBytes(envelope),
+    signature: base64ToBytes(envelope.signature.value)
+  });
+}
+async function assertSignedDocument(envelope, verifier) {
+  if (!await verifySignedDocument(envelope, verifier)) {
+    throw new Error("Signed document verification failed");
+  }
+  return envelope;
+}
+function signedDocumentPayloadBytes(payload) {
+  return jsonToBytes(JSON.parse(canonicalJson(toUnsignedPayload(payload))));
+}
+async function publishSignedDocument(provider, payload, options) {
+  const envelope = await signDocument(payload, options);
+  const published = await publishObjectJson(provider, envelope, options);
+  return {
+    ...published,
+    envelope
+  };
+}
+async function readSignedDocument(provider, reference, options = {}) {
+  const envelope = await readObjectJson(provider, reference, options);
+  validateSignedDocumentEnvelope(envelope);
+  return envelope;
+}
+async function readAndVerifySignedDocument(provider, reference, verifier, options = {}) {
+  const envelope = await readSignedDocument(provider, reference, options);
+  await assertSignedDocument(envelope, verifier);
+  return envelope;
+}
+async function generateP256SigningKeyPair(extractable = true) {
+  return getSubtle2().generateKey(
+    { name: ECDSA, namedCurve: P256_NAMED_CURVE },
+    extractable,
+    ["sign", "verify"]
+  );
+}
+async function exportP256PublicSigningKey(key) {
+  return getSubtle2().exportKey("jwk", key);
+}
+async function importP256PublicSigningKey(key) {
+  return getSubtle2().importKey(
+    "jwk",
+    key,
+    { name: ECDSA, namedCurve: P256_NAMED_CURVE },
+    true,
+    ["verify"]
+  );
+}
+async function exportP256PrivateSigningKey(key) {
+  return getSubtle2().exportKey("jwk", key);
+}
+async function importP256PrivateSigningKey(key, extractable = true) {
+  return getSubtle2().importKey(
+    "jwk",
+    key,
+    { name: ECDSA, namedCurve: P256_NAMED_CURVE },
+    extractable,
+    ["sign"]
+  );
+}
+async function createP256DocumentSigner(keyPair, options = {}) {
+  const publicKey = options.publicKey ?? await exportP256PublicSigningKey(keyPair.publicKey);
+  return {
+    id: options.id ?? p256PublicKeyId(publicKey),
+    scheme: P256_SIGNATURE_SCHEME,
+    publicKey,
+    sign: (bytes) => getSubtle2().sign(
+      { name: ECDSA, hash: "SHA-256" },
+      keyPair.privateKey,
+      toArrayBuffer2(bytes)
+    )
+  };
+}
+function createP256DocumentVerifier(options = {}) {
+  return {
+    verify: async ({ envelope, bytes, signature }) => {
+      if (envelope.signature.scheme !== P256_SIGNATURE_SCHEME) return false;
+      if (options.signer !== void 0 && envelope.signature.signer !== options.signer) return false;
+      const publicKey = await resolveP256PublicSigningKey(options.publicKey ?? envelope.signature.publicKey);
+      if (!publicKey) return false;
+      return getSubtle2().verify(
+        { name: ECDSA, hash: "SHA-256" },
+        publicKey,
+        toArrayBuffer2(signature),
+        toArrayBuffer2(bytes)
+      );
+    }
+  };
+}
+function createEip1193PersonalSigner(provider, options) {
+  const address = normalizeAddress(options.address);
+  return {
+    id: address,
+    scheme: EIP_191_PERSONAL_SIGN_SCHEME,
+    sign: async (bytes) => {
+      const signature = await provider.request({
+        method: "personal_sign",
+        params: [`0x${bytesToHex(bytes)}`, address]
+      });
+      return hexToBytes(signature);
+    }
+  };
+}
+function createEip191PersonalVerifier(recoverAddress, expectedAddress) {
+  const normalizedExpected = expectedAddress ? normalizeAddress(expectedAddress) : null;
+  return {
+    verify: async ({ envelope, bytes, signature }) => {
+      if (envelope.signature.scheme !== EIP_191_PERSONAL_SIGN_SCHEME) return false;
+      const recovered = normalizeAddress(await recoverAddress(bytes, signature));
+      const signer = normalizeAddress(envelope.signature.signer);
+      return recovered === signer && (normalizedExpected === null || recovered === normalizedExpected);
+    }
+  };
+}
+function createSignedDocumentPayload(payload, options) {
+  return {
+    version: 1,
+    type: SIGNED_DOCUMENT_PAYLOAD_TYPE,
+    subject: normalizeSubject(options.subject),
+    signedAt: normalizeSignedAt(options.signedAt),
+    payload
+  };
+}
+function toUnsignedPayload(payload) {
+  return {
+    version: 1,
+    type: SIGNED_DOCUMENT_PAYLOAD_TYPE,
+    subject: normalizeSubject(payload.subject),
+    signedAt: normalizeSignedAt(payload.signedAt),
+    payload: payload.payload
+  };
+}
+function validateSignedDocumentEnvelope(envelope) {
+  if (envelope.version !== 1 || envelope.type !== SIGNED_DOCUMENT_PAYLOAD_TYPE || typeof envelope.subject !== "string" || !envelope.subject.trim() || typeof envelope.signedAt !== "string" || Number.isNaN(Date.parse(envelope.signedAt)) || envelope.signature?.encoding !== SIGNED_DOCUMENT_SIGNATURE_ENCODING || typeof envelope.signature.scheme !== "string" || !envelope.signature.scheme.trim() || typeof envelope.signature.signer !== "string" || !envelope.signature.signer.trim() || typeof envelope.signature.value !== "string") {
+    throw new Error("Invalid signed document envelope");
+  }
+  base64ToBytes(envelope.signature.value);
+}
+function canonicalJson(value) {
+  const normalized = JSON.stringify(value);
+  if (normalized === void 0) {
+    throw new Error("Signed document payload must be JSON serializable");
+  }
+  return stringifyCanonical(JSON.parse(normalized));
+}
+function stringifyCanonical(value) {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stringifyCanonical(item)).join(",")}]`;
+  }
+  const record = value;
+  return `{${Object.keys(record).sort().map(
+    (key) => `${JSON.stringify(key)}:${stringifyCanonical(record[key])}`
+  ).join(",")}}`;
+}
+function normalizeSignatureBytes(signature) {
+  return normalizeBytes(signature);
+}
+async function resolveP256PublicSigningKey(key) {
+  if (!key) return null;
+  if (isCryptoKey2(key)) return key;
+  if (!isP256PublicJwk2(key)) return null;
+  return importP256PublicSigningKey(key);
+}
+function isCryptoKey2(key) {
+  return typeof key === "object" && key !== null && "algorithm" in key && "extractable" in key && "type" in key && "usages" in key;
+}
+function isP256PublicJwk2(key) {
+  return key !== null && typeof key === "object" && key.kty === "EC" && key.crv === P256_NAMED_CURVE && typeof key.x === "string" && typeof key.y === "string";
+}
+function p256PublicKeyId(publicKey) {
+  return `p256:${deriveIdentifier(["swarm-kit:p256-public-signing-key", canonicalJson(publicKey)]).slice(0, 40)}`;
+}
+function normalizeSubject(subject) {
+  const normalized = subject.trim();
+  if (!normalized) throw new Error("Signed document subject must not be empty");
+  return normalized;
+}
+function normalizeSignedAt(signedAt) {
+  const normalized = signedAt === void 0 ? /* @__PURE__ */ new Date() : signedAt instanceof Date ? signedAt : new Date(signedAt);
+  if (Number.isNaN(normalized.getTime())) {
+    throw new Error("Signed document signedAt must be a valid date");
+  }
+  return normalized.toISOString();
+}
+function normalizeAddress(address) {
+  const normalized = String(address).trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(normalized)) {
+    throw new Error("Ethereum address must be 0x-prefixed with 40 hex characters");
+  }
+  return `0x${normalized.slice(2).toLowerCase()}`;
+}
+function toArrayBuffer2(bytes) {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+function getCrypto2() {
+  if (!globalThis.crypto) {
+    throw new Error("Web Crypto is not available in this environment");
+  }
+  return globalThis.crypto;
+}
+function getSubtle2() {
+  const subtle = getCrypto2().subtle;
+  if (!subtle) {
+    throw new Error("Web Crypto subtle API is not available in this environment");
+  }
+  return subtle;
+}
+
 // src/client.ts
 function createSwarmKit(provider = getWindowSwarm()) {
   const chunks = {
@@ -1777,6 +2022,24 @@ function createSwarmKit(provider = getWindowSwarm()) {
   const lookup = {
     create: (options) => createKeyedLookup(provider, options)
   };
+  const signedDocuments = {
+    sign: signDocument,
+    verify: verifySignedDocument,
+    assert: assertSignedDocument,
+    signingBytes: signedDocumentPayloadBytes,
+    publish: publishSignedDocument.bind(null, provider),
+    read: readSignedDocument.bind(null, provider),
+    readAndVerify: readAndVerifySignedDocument.bind(null, provider),
+    generateP256KeyPair: generateP256SigningKeyPair,
+    exportP256PublicKey: exportP256PublicSigningKey,
+    importP256PublicKey: importP256PublicSigningKey,
+    exportP256PrivateKey: exportP256PrivateSigningKey,
+    importP256PrivateKey: importP256PrivateSigningKey,
+    createP256Signer: createP256DocumentSigner,
+    createP256Verifier: createP256DocumentVerifier,
+    createEip1193PersonalSigner,
+    createEip191PersonalVerifier
+  };
   return {
     provider,
     requestAccess: () => callSwarm(provider, "swarm_requestAccess"),
@@ -1790,6 +2053,7 @@ function createSwarmKit(provider = getWindowSwarm()) {
     multiWriterFeed,
     crypto,
     lookup,
+    signedDocuments,
     publishBytes: chunks.publishBytes,
     readBytes: chunks.readBytes,
     publishText: chunks.publishText,
@@ -2131,6 +2395,7 @@ export {
   assertHex,
   assertIndexedSocIndex,
   assertIndexedSocLimit,
+  assertSignedDocument,
   base64ToBytes,
   bytesToBase64,
   bytesToHex,
@@ -2139,11 +2404,15 @@ export {
   callSwarm,
   concatBytes,
   createDidDocument,
+  createEip1193PersonalSigner,
+  createEip191PersonalVerifier,
   createEpochFeed,
   createHashChain,
   createIndexedSocStream,
   createKeyedLookup,
   createMultiWriterFeed,
+  createP256DocumentSigner,
+  createP256DocumentVerifier,
   createSwarmKit,
   decryptBytes,
   decryptBytesFrom,
@@ -2163,16 +2432,21 @@ export {
   encryptText,
   encryptTextFor,
   exportEncryptionKey,
+  exportP256PrivateSigningKey,
+  exportP256PublicSigningKey,
   exportPrivateEncryptionKey,
   exportPublicEncryptionKey,
   findLatestContiguousIndex,
   generateEncryptionKey,
   generateEncryptionKeyPair,
+  generateP256SigningKeyPair,
   getSigningIdentity,
   getSwarmErrorReason,
   getWindowSwarm,
   hexToBytes,
   importEncryptionKey,
+  importP256PrivateSigningKey,
+  importP256PublicSigningKey,
   importPrivateEncryptionKey,
   importPublicEncryptionKey,
   isSwarmReason,
@@ -2191,7 +2465,9 @@ export {
   publishObjectBytes,
   publishObjectJson,
   publishObjectText,
+  publishSignedDocument,
   publishText,
+  readAndVerifySignedDocument,
   readBytes,
   readDidDocument,
   readEncryptedBytes,
@@ -2206,6 +2482,7 @@ export {
   readObjectJson,
   readObjectText,
   readPublicKeyEncryptedEnvelope,
+  readSignedDocument,
   readSocBytesByAddress,
   readSocBytesByOwnerAndIdentifier,
   readSocJsonByAddress,
@@ -2214,7 +2491,10 @@ export {
   readSocTextByOwnerAndIdentifier,
   readText,
   runSwarmProviderCompliance,
+  signDocument,
+  signedDocumentPayloadBytes,
   utf8ToBytes,
+  verifySignedDocument,
   waitForSwarm,
   writeDidDocument,
   writeSocBytes,

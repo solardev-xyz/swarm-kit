@@ -55,6 +55,24 @@ import {
   writeSocText,
 } from './soc.js';
 import { callSwarm, getWindowSwarm, type SwarmProvider } from './provider.js';
+import {
+  assertSignedDocument,
+  createEip1193PersonalSigner,
+  createEip191PersonalVerifier,
+  createP256DocumentSigner,
+  createP256DocumentVerifier,
+  exportP256PrivateSigningKey,
+  exportP256PublicSigningKey,
+  generateP256SigningKeyPair,
+  importP256PrivateSigningKey,
+  importP256PublicSigningKey,
+  publishSignedDocument,
+  readAndVerifySignedDocument,
+  readSignedDocument,
+  signDocument,
+  signedDocumentPayloadBytes,
+  verifySignedDocument,
+} from './signed-documents.js';
 
 export function createSwarmKit(provider: SwarmProvider = getWindowSwarm()) {
   const chunks = {
@@ -141,6 +159,24 @@ export function createSwarmKit(provider: SwarmProvider = getWindowSwarm()) {
   const lookup = {
     create: <T = unknown>(options: Parameters<typeof createKeyedLookup<T>>[1]) => createKeyedLookup<T>(provider, options),
   };
+  const signedDocuments = {
+    sign: signDocument,
+    verify: verifySignedDocument,
+    assert: assertSignedDocument,
+    signingBytes: signedDocumentPayloadBytes,
+    publish: publishSignedDocument.bind(null, provider),
+    read: readSignedDocument.bind(null, provider),
+    readAndVerify: readAndVerifySignedDocument.bind(null, provider),
+    generateP256KeyPair: generateP256SigningKeyPair,
+    exportP256PublicKey: exportP256PublicSigningKey,
+    importP256PublicKey: importP256PublicSigningKey,
+    exportP256PrivateKey: exportP256PrivateSigningKey,
+    importP256PrivateKey: importP256PrivateSigningKey,
+    createP256Signer: createP256DocumentSigner,
+    createP256Verifier: createP256DocumentVerifier,
+    createEip1193PersonalSigner,
+    createEip191PersonalVerifier,
+  };
 
   return {
     provider,
@@ -155,6 +191,7 @@ export function createSwarmKit(provider: SwarmProvider = getWindowSwarm()) {
     multiWriterFeed,
     crypto,
     lookup,
+    signedDocuments,
     publishBytes: chunks.publishBytes,
     readBytes: chunks.readBytes,
     publishText: chunks.publishText,
