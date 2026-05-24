@@ -183,6 +183,24 @@
       color: var(--muted);
     }
 
+    .report-panel {
+      margin-top: 14px;
+    }
+
+    #report-json {
+      display: block;
+      width: 100%;
+      min-height: 220px;
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fbfcfe;
+      color: var(--text);
+      padding: 10px;
+      resize: vertical;
+      font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
     @media (max-width: 860px) {
       .app { padding: 16px; }
       .topbar,
@@ -242,6 +260,11 @@
 
     <section id="results" class="results">
       <div class="panel empty">Run the checks to see results</div>
+    </section>
+
+    <section class="panel report-panel">
+      <h2>Report JSON</h2>
+      <textarea id="report-json" readonly spellcheck="false"></textarea>
     </section>
   </main>
 
@@ -318,12 +341,22 @@
 
     async function copyReport() {
       if (!state.report) return;
-      await navigator.clipboard.writeText(JSON.stringify(state.report, null, 2));
-      setRunState({
-        copied: true,
-        finishedAt: state.report.finishedAt,
-        summary: state.report.summary
-      });
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(state.report, null, 2));
+        setRunState({
+          copied: true,
+          finishedAt: state.report.finishedAt,
+          summary: state.report.summary
+        });
+      } catch (error) {
+        selectReportJson();
+        setRunState({
+          copied: false,
+          fallback: 'report-json-selected',
+          error: formatError(error),
+          summary: state.report.summary
+        });
+      }
     }
 
     async function ensureProvider() {
@@ -352,6 +385,7 @@
       $('skipped').textContent = String(summary.skipped);
       $('total').textContent = String(summary.total);
       $('copy').disabled = false;
+      $('report-json').value = JSON.stringify(report, null, 2);
       setRunState({
         runId: report.runId,
         startedAt: report.startedAt,
@@ -392,6 +426,12 @@
 
       article.append(header, body);
       return article;
+    }
+
+    function selectReportJson() {
+      const report = $('report-json');
+      report.focus();
+      report.select();
     }
 
     function setProviderState(value) {
