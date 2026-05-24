@@ -134,6 +134,34 @@ const value = await kit.objects.readJson(big.reference)
 console.log(big.chunkCount, value)
 ```
 
+## Encryption Helpers
+
+Encryption helpers use browser Web Crypto with caller-managed AES-GCM keys.
+Freedom Browser stores and transports only ciphertext bytes; key storage,
+backup, and sharing remain the application's responsibility in this first
+version.
+
+```ts
+const key = await kit.crypto.generateKey()
+const exported = await kit.crypto.exportKey(key)
+
+const encrypted = await kit.crypto.publishJson({
+  secret: 'hello',
+}, key)
+
+const sameKey = await kit.crypto.importKey(exported)
+const value = await kit.crypto.readJson(encrypted.reference, sameKey)
+
+console.log(value)
+```
+
+For password-based demos, derive a symmetric key with PBKDF2:
+
+```ts
+const derived = await kit.crypto.deriveKeyFromPassword(password)
+const key = derived.key
+```
+
 ## DID-Style Documents
 
 DID-style documents store each document body as a chunk graph and each document
@@ -206,6 +234,26 @@ const merged = await feed.readLatest([
 console.log(merged.map(entry => entry.payload))
 ```
 
+## Keyed Lookup Streams
+
+Keyed lookup streams are revisioned records per application-defined key: latest
+profile per username, latest status per category, history for a search key, and
+similar lookup patterns that are not native Bee sequence feeds.
+
+```ts
+const lookup = kit.lookup.create<{ status: string }>({
+  namespace: 'presence',
+})
+
+const written = await lookup.write('alice', { status: 'online' })
+await lookup.write('alice', { status: 'away' })
+
+const latest = await lookup.readLatest(written.owner, 'alice')
+const history = await lookup.readHistory(written.owner, 'alice')
+
+console.log(latest?.value, history.map(entry => entry.index))
+```
+
 ## Epoch Feeds
 
 Epoch feeds store entries at deterministic SOC identifiers derived from a topic,
@@ -240,16 +288,18 @@ console.log(current?.value, latest?.value)
 - indexed SOC stream helper
 - chunk graph text/JSON/bytes helpers
 - SOC text/JSON/bytes helpers
+- AES-GCM encrypted object helpers
 - revisioned DID-style document helper
 - single-writer hash-chain helper
 - multi-writer feed helper
+- keyed lookup stream helper
 - deterministic identifier derivation using Keccak-256
 - epoch-feed helper
 - in-memory mock provider tests
 
 Not included yet:
 
-- encryption helpers
+- recipient public-key encryption and key exchange
 - CRDT conflict resolution on top of multi-writer entries
 - mailbox/inbox discovery conventions
 - Bee-compatible ACT abstractions

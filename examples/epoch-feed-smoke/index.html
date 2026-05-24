@@ -145,9 +145,11 @@
   <nav class="tabs" aria-label="Playground sections">
     <button class="tab active" data-panel="epoch">Epoch Feed</button>
     <button class="tab" data-panel="objects">Objects</button>
+    <button class="tab" data-panel="crypto">Encryption</button>
     <button class="tab" data-panel="did">DID Document</button>
     <button class="tab" data-panel="hash">Hash Chain</button>
     <button class="tab" data-panel="multi">Multi-Writer</button>
+    <button class="tab" data-panel="lookup">Lookup</button>
   </nav>
 
   <section id="panel-epoch" class="panel active">
@@ -192,6 +194,23 @@
         </div>
       </div>
       <pre id="object-output" class="result">-</pre>
+    </div>
+  </section>
+
+  <section id="panel-crypto" class="panel">
+    <div class="grid">
+      <div>
+        <label for="crypto-key">Key</label>
+        <textarea id="crypto-key" style="min-height: 86px;"></textarea>
+        <label for="crypto-payload">JSON</label>
+        <textarea id="crypto-payload">{"secret":"hello swarm"}</textarea>
+        <div class="actions">
+          <button class="requires-provider" id="crypto-generate" disabled>Generate Key</button>
+          <button class="requires-provider secondary" id="crypto-publish" disabled>Publish Encrypted</button>
+          <button class="requires-provider secondary" id="crypto-read" disabled>Read Last</button>
+        </div>
+      </div>
+      <pre id="crypto-output" class="result">-</pre>
     </div>
   </section>
 
@@ -264,6 +283,34 @@
     </div>
   </section>
 
+  <section id="panel-lookup" class="panel">
+    <div class="grid">
+      <div>
+        <div class="field-row">
+          <div>
+            <label for="lookup-namespace">Namespace</label>
+            <input id="lookup-namespace" value="swarm-kit-playground-lookup">
+          </div>
+          <div>
+            <label for="lookup-key">Key</label>
+            <input id="lookup-key" value="alice">
+          </div>
+        </div>
+        <label for="lookup-payload">Value</label>
+        <textarea id="lookup-payload">{"status":"online"}</textarea>
+        <label for="lookup-index">Index</label>
+        <input id="lookup-index" value="0" inputmode="numeric">
+        <div class="actions">
+          <button class="requires-provider" id="lookup-write" disabled>Write</button>
+          <button class="requires-provider secondary" id="lookup-read" disabled>Read Latest</button>
+          <button class="requires-provider secondary" id="lookup-history" disabled>Read History</button>
+          <button class="requires-provider secondary" id="lookup-read-index" disabled>Read Index</button>
+        </div>
+      </div>
+      <pre id="lookup-output" class="result">-</pre>
+    </div>
+  </section>
+
   <script type="module">
     import { createSwarmKit, waitForSwarm } from './swarm-kit.js';
 
@@ -273,14 +320,17 @@
       status: $('status'),
       epoch: $('epoch-output'),
       objects: $('object-output'),
+      crypto: $('crypto-output'),
       did: $('did-output'),
       hash: $('hash-output'),
       multi: $('multi-output'),
+      lookup: $('lookup-output'),
     };
 
     let kit;
     let owner = '';
     let lastObjectReference = '';
+    let lastEncryptedReference = '';
 
     const stringify = (value) => typeof value === 'string'
       ? value
@@ -345,6 +395,18 @@
         topic: $('multi-topic').value.trim() || 'swarm-kit-playground-team',
         writerId: $('multi-writer').value.trim() || 'default',
       });
+    }
+
+    function keyedLookup() {
+      return kit.lookup.create({
+        namespace: $('lookup-namespace').value.trim() || 'swarm-kit-playground-lookup',
+      });
+    }
+
+    async function importPlaygroundKey() {
+      const key = $('crypto-key').value.trim();
+      if (!key) throw new Error('No encryption key');
+      return kit.crypto.importKey(key);
     }
 
     function addKnownWriter(writer) {
@@ -446,6 +508,37 @@
         }
       };
 
+      $('crypto-generate').onclick = async () => {
+        try {
+          const key = await kit.crypto.generateKey();
+          const exported = await kit.crypto.exportKey(key);
+          $('crypto-key').value = exported;
+          show(outputs.crypto, { key: exported });
+        } catch (error) {
+          showError(outputs.crypto, error);
+        }
+      };
+
+      $('crypto-publish').onclick = async () => {
+        try {
+          const key = await importPlaygroundKey();
+          const result = await kit.crypto.publishJson(parseJson('crypto-payload'), key);
+          lastEncryptedReference = result.reference;
+          show(outputs.crypto, result);
+        } catch (error) {
+          showError(outputs.crypto, error);
+        }
+      };
+
+      $('crypto-read').onclick = async () => {
+        try {
+          if (!lastEncryptedReference) throw new Error('No encrypted reference yet');
+          show(outputs.crypto, await kit.crypto.readJson(lastEncryptedReference, await importPlaygroundKey()));
+        } catch (error) {
+          showError(outputs.crypto, error);
+        }
+      };
+
       $('did-write').onclick = async () => {
         try {
           const result = await kit.did.writeDocument(parseJson('did-payload'));
@@ -543,6 +636,55 @@
           }));
         } catch (error) {
           showError(outputs.multi, error);
+        }
+      };
+
+      $('lookup-write').onclick = async () => {
+        try {
+          const result = await keyedLookup().write(
+            $('lookup-key').value.trim() || 'alice',
+            parseJson('lookup-payload'),
+          );
+          owner = result.owner;
+          $('lookup-index').value = String(result.index);
+          show(outputs.lookup, result);
+        } catch (error) {
+          showError(outputs.lookup, error);
+        }
+      };
+
+      $('lookup-read').onclick = async () => {
+        try {
+          show(outputs.lookup, await keyedLookup().readLatest(
+            await ensureOwner(),
+            $('lookup-key').value.trim() || 'alice',
+          ));
+        } catch (error) {
+          showError(outputs.lookup, error);
+        }
+      };
+
+      $('lookup-history').onclick = async () => {
+        try {
+          show(outputs.lookup, await keyedLookup().readHistory(
+            await ensureOwner(),
+            $('lookup-key').value.trim() || 'alice',
+            { limit: 10 },
+          ));
+        } catch (error) {
+          showError(outputs.lookup, error);
+        }
+      };
+
+      $('lookup-read-index').onclick = async () => {
+        try {
+          show(outputs.lookup, await keyedLookup().readAt(
+            await ensureOwner(),
+            $('lookup-key').value.trim() || 'alice',
+            parseIndex('lookup-index'),
+          ));
+        } catch (error) {
+          showError(outputs.lookup, error);
         }
       };
     }

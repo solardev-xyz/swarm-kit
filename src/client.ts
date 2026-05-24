@@ -1,7 +1,27 @@
 import { publishBytes, publishJson, publishText, readBytes, readJson, readText } from './chunks.js';
 import { createDidDocument, didDocumentIdentifier, didDocumentRevisionIdentifier, readDidDocument, writeDidDocument } from './did.js';
+import {
+  decryptBytes,
+  decryptJson,
+  decryptText,
+  deriveEncryptionKeyFromPassword,
+  encryptBytes,
+  encryptJson,
+  encryptText,
+  exportEncryptionKey,
+  generateEncryptionKey,
+  importEncryptionKey,
+  publishEncryptedBytes,
+  publishEncryptedJson,
+  publishEncryptedText,
+  readEncryptedBytes,
+  readEncryptedEnvelope,
+  readEncryptedJson,
+  readEncryptedText,
+} from './encryption.js';
 import { createEpochFeed } from './epoch-feed.js';
 import { createHashChain } from './hash-chain.js';
+import { createKeyedLookup } from './lookup.js';
 import { createMultiWriterFeed } from './multi-writer-feed.js';
 import { publishObjectBytes, publishObjectJson, publishObjectText, readObjectBytes, readObjectJson, readObjectText } from './objects.js';
 import {
@@ -63,6 +83,28 @@ export function createSwarmKit(provider: SwarmProvider = getWindowSwarm()) {
   const multiWriterFeed = {
     create: <T = unknown>(options: Parameters<typeof createMultiWriterFeed<T>>[1]) => createMultiWriterFeed<T>(provider, options),
   };
+  const crypto = {
+    generateKey: generateEncryptionKey,
+    exportKey: exportEncryptionKey,
+    importKey: importEncryptionKey,
+    deriveKeyFromPassword: deriveEncryptionKeyFromPassword,
+    encryptBytes,
+    decryptBytes,
+    encryptText,
+    decryptText,
+    encryptJson,
+    decryptJson,
+    publishBytes: publishEncryptedBytes.bind(null, provider),
+    readBytes: readEncryptedBytes.bind(null, provider),
+    publishText: publishEncryptedText.bind(null, provider),
+    readText: readEncryptedText.bind(null, provider),
+    publishJson: publishEncryptedJson.bind(null, provider),
+    readJson: readEncryptedJson.bind(null, provider),
+    readEnvelope: readEncryptedEnvelope.bind(null, provider),
+  };
+  const lookup = {
+    create: <T = unknown>(options: Parameters<typeof createKeyedLookup<T>>[1]) => createKeyedLookup<T>(provider, options),
+  };
 
   return {
     provider,
@@ -75,6 +117,8 @@ export function createSwarmKit(provider: SwarmProvider = getWindowSwarm()) {
     did,
     hashChain,
     multiWriterFeed,
+    crypto,
+    lookup,
     publishBytes: chunks.publishBytes,
     readBytes: chunks.readBytes,
     publishText: chunks.publishText,

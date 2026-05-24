@@ -560,7 +560,7 @@ function createIndexedSocStream(provider, options) {
   const entryTag = options.entryTag ?? DEFAULT_ENTRY_TAG;
   const label = options.label ?? DEFAULT_LABEL;
   const maxAppendAttempts = options.maxAppendAttempts ?? DEFAULT_MAX_APPEND_ATTEMPTS;
-  const sameEnvelope4 = options.sameEnvelope ?? defaultSameEnvelope;
+  const sameEnvelope5 = options.sameEnvelope ?? defaultSameEnvelope;
   function entryIdentifier(index) {
     assertIndexedSocIndex(index, `${label} index`);
     return deriveIdentifier([options.namespace, ...parts, entryTag, index]);
@@ -616,7 +616,7 @@ function createIndexedSocStream(provider, options) {
         const identifier = entryIdentifier(index);
         const entryWrite = await writeSocJson(provider, identifier, envelope);
         const stored = await readRecord(owner, index);
-        if (stored && sameEnvelope4(stored.envelope, envelope)) {
+        if (stored && sameEnvelope5(stored.envelope, envelope)) {
           return {
             ...toStreamEntry(stored),
             entryWrite
@@ -936,6 +936,168 @@ function sameEnvelope(a, b) {
   return a.version === b.version && a.type === b.type && a.revision === b.revision && a.index === b.index && a.previousReference === b.previousReference && a.documentReference === b.documentReference && a.documentSize === b.documentSize && a.writtenAt === b.writtenAt;
 }
 
+// src/encryption.ts
+var AES_GCM = "AES-GCM";
+var AES_KEY_LENGTH = 256;
+var NONCE_BYTES = 12;
+var SALT_BYTES = 16;
+var DEFAULT_PBKDF2_ITERATIONS = 21e4;
+var DEFAULT_PBKDF2_HASH = "SHA-256";
+async function generateEncryptionKey() {
+  return getSubtle().generateKey(
+    { name: AES_GCM, length: AES_KEY_LENGTH },
+    true,
+    ["encrypt", "decrypt"]
+  );
+}
+async function exportEncryptionKey(key) {
+  return bytesToBase64(new Uint8Array(await getSubtle().exportKey("raw", key)));
+}
+async function importEncryptionKey(key) {
+  const bytes = typeof key === "string" ? base64ToBytes(key) : normalizeBytes(key);
+  if (bytes.length !== 32) {
+    throw new Error("AES-GCM keys must be 32 bytes");
+  }
+  return getSubtle().importKey("raw", toArrayBuffer(bytes), AES_GCM, true, ["encrypt", "decrypt"]);
+}
+async function deriveEncryptionKeyFromPassword(password, options = {}) {
+  const saltBytes = options.salt === void 0 ? randomBytes(SALT_BYTES) : typeof options.salt === "string" ? base64ToBytes(options.salt) : normalizeBytes(options.salt);
+  const iterations = options.iterations ?? DEFAULT_PBKDF2_ITERATIONS;
+  const hash = options.hash ?? DEFAULT_PBKDF2_HASH;
+  if (!Number.isSafeInteger(iterations) || iterations <= 0) {
+    throw new Error("PBKDF2 iterations must be a positive safe integer");
+  }
+  const passwordKey = await getSubtle().importKey(
+    "raw",
+    toArrayBuffer(utf8ToBytes(password)),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
+  const key = await getSubtle().deriveKey(
+    {
+      name: "PBKDF2",
+      salt: toArrayBuffer(saltBytes),
+      iterations,
+      hash
+    },
+    passwordKey,
+    { name: AES_GCM, length: AES_KEY_LENGTH },
+    true,
+    ["encrypt", "decrypt"]
+  );
+  return {
+    key,
+    salt: bytesToBase64(saltBytes),
+    iterations,
+    hash
+  };
+}
+async function encryptBytes(bytes, key) {
+  const plaintext = normalizeBytes(bytes);
+  const nonce = randomBytes(NONCE_BYTES);
+  const ciphertext = new Uint8Array(await getSubtle().encrypt(
+    { name: AES_GCM, iv: toArrayBuffer(nonce) },
+    key,
+    toArrayBuffer(plaintext)
+  ));
+  return {
+    version: 1,
+    type: "swarm-kit:encrypted-bytes",
+    algorithm: "AES-GCM",
+    keyLength: AES_KEY_LENGTH,
+    nonce: bytesToBase64(nonce),
+    ciphertext: bytesToBase64(ciphertext),
+    plaintextSize: plaintext.length
+  };
+}
+async function decryptBytes(envelope, key) {
+  validateEncryptedEnvelope(envelope);
+  const plaintext = new Uint8Array(await getSubtle().decrypt(
+    { name: AES_GCM, iv: toArrayBuffer(base64ToBytes(envelope.nonce)) },
+    key,
+    toArrayBuffer(base64ToBytes(envelope.ciphertext))
+  ));
+  if (plaintext.length !== envelope.plaintextSize) {
+    throw new Error("Encrypted object plaintext size mismatch");
+  }
+  return plaintext;
+}
+async function encryptText(text, key) {
+  return encryptBytes(utf8ToBytes(text), key);
+}
+async function decryptText(envelope, key) {
+  return bytesToUtf8(await decryptBytes(envelope, key));
+}
+async function encryptJson(value, key) {
+  return encryptBytes(jsonToBytes(value), key);
+}
+async function decryptJson(envelope, key) {
+  return bytesToJson(await decryptBytes(envelope, key));
+}
+async function publishEncryptedBytes(provider, bytes, key, options = {}) {
+  const envelope = await encryptBytes(bytes, key);
+  return publishEncryptedEnvelope(provider, envelope, options);
+}
+async function readEncryptedBytes(provider, reference, key, options = {}) {
+  return decryptBytes(await readEncryptedEnvelope(provider, reference, options), key);
+}
+async function publishEncryptedText(provider, text, key, options = {}) {
+  const envelope = await encryptText(text, key);
+  return publishEncryptedEnvelope(provider, envelope, options);
+}
+async function readEncryptedText(provider, reference, key, options = {}) {
+  return decryptText(await readEncryptedEnvelope(provider, reference, options), key);
+}
+async function publishEncryptedJson(provider, value, key, options = {}) {
+  const envelope = await encryptJson(value, key);
+  return publishEncryptedEnvelope(provider, envelope, options);
+}
+async function readEncryptedJson(provider, reference, key, options = {}) {
+  return decryptJson(await readEncryptedEnvelope(provider, reference, options), key);
+}
+async function readEncryptedEnvelope(provider, reference, options = {}) {
+  const envelope = await readObjectJson(provider, reference, options);
+  validateEncryptedEnvelope(envelope);
+  return envelope;
+}
+function publishEncryptedEnvelope(provider, envelope, options) {
+  return publishObjectJson(provider, envelope, options).then((published) => ({
+    ...published,
+    plaintextSize: envelope.plaintextSize,
+    ciphertextSize: base64ToBytes(envelope.ciphertext).length,
+    envelope
+  }));
+}
+function validateEncryptedEnvelope(envelope) {
+  if (envelope.version !== 1 || envelope.type !== "swarm-kit:encrypted-bytes" || envelope.algorithm !== "AES-GCM" || envelope.keyLength !== AES_KEY_LENGTH || typeof envelope.nonce !== "string" || base64ToBytes(envelope.nonce).length !== NONCE_BYTES || typeof envelope.ciphertext !== "string" || typeof envelope.plaintextSize !== "number" || !Number.isSafeInteger(envelope.plaintextSize) || envelope.plaintextSize < 0) {
+    throw new Error("Invalid encrypted object envelope");
+  }
+}
+function randomBytes(size) {
+  const bytes = new Uint8Array(size);
+  getCrypto().getRandomValues(bytes);
+  return bytes;
+}
+function toArrayBuffer(bytes) {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+function getCrypto() {
+  if (!globalThis.crypto) {
+    throw new Error("Web Crypto is not available in this environment");
+  }
+  return globalThis.crypto;
+}
+function getSubtle() {
+  const subtle = getCrypto().subtle;
+  if (!subtle) {
+    throw new Error("Web Crypto subtle API is not available in this environment");
+  }
+  return subtle;
+}
+
 // src/epoch-feed.ts
 var DEFAULT_NAMESPACE = "swarm-kit:epoch-feed:v1";
 function createEpochFeed(provider, options) {
@@ -1124,6 +1286,107 @@ function sameEnvelope2(a, b) {
   return a.version === b.version && a.type === b.type && a.topic === b.topic && a.index === b.index && a.previousReference === b.previousReference && a.payloadReference === b.payloadReference && a.payloadSize === b.payloadSize && a.writtenAt === b.writtenAt;
 }
 
+// src/lookup.ts
+var DEFAULT_LOOKUP_LABEL = "keyed lookup";
+function createKeyedLookup(provider, options) {
+  const namespace = normalizeNamespace(options.namespace);
+  function streamFor(key) {
+    const normalizedKey = normalizeKey(key);
+    return createIndexedSocStream(provider, {
+      namespace,
+      parts: [normalizedKey],
+      entryTag: "entry",
+      label: DEFAULT_LOOKUP_LABEL,
+      parseEnvelope: (value, context) => {
+        const envelope = parseLookupEnvelope(value, namespace, normalizedKey);
+        if (envelope.index !== context.index) {
+          throw new Error(`Keyed lookup entry index mismatch for ${context.reference}`);
+        }
+        return envelope;
+      },
+      sameEnvelope: sameEnvelope3
+    });
+  }
+  async function hydrateEntry(record) {
+    return hydrateStreamEntry({
+      owner: record.soc.owner,
+      identifier: record.soc.identifier,
+      reference: record.soc.reference,
+      envelope: record.envelope
+    });
+  }
+  async function hydrateStreamEntry(entry) {
+    const value = await readObjectJson(provider, entry.envelope.valueReference);
+    return {
+      ...entry.envelope,
+      owner: entry.owner,
+      identifier: entry.identifier,
+      reference: entry.reference,
+      value
+    };
+  }
+  return {
+    namespace,
+    entryIdentifier: (key, index) => streamFor(key).entryIdentifier(index),
+    getOwner: streamFor("__owner__").getOwner,
+    async write(key, value, writeOptions = {}) {
+      const normalizedKey = normalizeKey(key);
+      const published = await publishObjectJson(provider, value);
+      const writtenAt = new Date(writeOptions.at ?? Date.now()).toISOString();
+      const appended = await streamFor(normalizedKey).append(({ index, previousReference }) => ({
+        version: 1,
+        type: "swarm-kit:keyed-lookup-entry",
+        namespace,
+        key: normalizedKey,
+        index,
+        previousReference,
+        valueReference: published.reference,
+        valueSize: published.size,
+        writtenAt
+      }));
+      return {
+        ...appended.envelope,
+        owner: appended.owner,
+        identifier: appended.identifier,
+        reference: appended.reference,
+        value,
+        entryWrite: appended.entryWrite
+      };
+    },
+    async readAt(owner, key, index) {
+      const record = await streamFor(key).readRecord(owner, index);
+      return record ? hydrateEntry(record) : null;
+    },
+    async readLatest(owner, key) {
+      const record = await streamFor(key).readLatestRecord(owner);
+      return record ? hydrateEntry(record) : null;
+    },
+    async readHistory(owner, key, readOptions = {}) {
+      const limit = readOptions.limit ?? 10;
+      assertIndexedSocLimit(limit, "keyed lookup history limit");
+      const entries = await streamFor(key).readLatest(owner, { limit });
+      return Promise.all(entries.map(hydrateStreamEntry));
+    }
+  };
+}
+function parseLookupEnvelope(value, namespace, key) {
+  if (value.version !== 1 || value.type !== "swarm-kit:keyed-lookup-entry" || value.namespace !== namespace || value.key !== key || !Number.isSafeInteger(value.index) || value.index < 0 || !(typeof value.previousReference === "string" || value.previousReference === null) || typeof value.valueReference !== "string" || typeof value.valueSize !== "number" || !Number.isSafeInteger(value.valueSize) || value.valueSize < 0 || typeof value.writtenAt !== "string") {
+    throw new Error("Invalid keyed lookup entry");
+  }
+  return value;
+}
+function sameEnvelope3(a, b) {
+  return a.version === b.version && a.type === b.type && a.namespace === b.namespace && a.key === b.key && a.index === b.index && a.previousReference === b.previousReference && a.valueReference === b.valueReference && a.valueSize === b.valueSize && a.writtenAt === b.writtenAt;
+}
+function normalizeNamespace(namespace) {
+  if (!namespace.trim()) throw new Error("Keyed lookup namespace must not be empty");
+  return namespace;
+}
+function normalizeKey(key) {
+  if (!key.trim()) throw new Error("Keyed lookup key must not be empty");
+  return key;
+}
+
 // src/multi-writer-feed.ts
 var DEFAULT_MULTI_WRITER_NAMESPACE = "swarm-kit:multi-writer-feed:v1";
 var DEFAULT_WRITER_ID = "default";
@@ -1148,7 +1411,7 @@ function createMultiWriterFeed(provider, options) {
         }
         return envelope;
       },
-      sameEnvelope: sameEnvelope3
+      sameEnvelope: sameEnvelope4
     });
   }
   async function hydrateEntry(record) {
@@ -1245,7 +1508,7 @@ function parseEntryEnvelope2(value, topic, writerId) {
   }
   return value;
 }
-function sameEnvelope3(a, b) {
+function sameEnvelope4(a, b) {
   return a.version === b.version && a.type === b.type && a.topic === b.topic && a.writerId === b.writerId && a.index === b.index && a.previousReference === b.previousReference && a.payloadReference === b.payloadReference && a.payloadSize === b.payloadSize && a.writtenAt === b.writtenAt;
 }
 function compareEntriesNewestFirst(a, b) {
@@ -1304,6 +1567,28 @@ function createSwarmKit(provider = getWindowSwarm()) {
   const multiWriterFeed = {
     create: (options) => createMultiWriterFeed(provider, options)
   };
+  const crypto = {
+    generateKey: generateEncryptionKey,
+    exportKey: exportEncryptionKey,
+    importKey: importEncryptionKey,
+    deriveKeyFromPassword: deriveEncryptionKeyFromPassword,
+    encryptBytes,
+    decryptBytes,
+    encryptText,
+    decryptText,
+    encryptJson,
+    decryptJson,
+    publishBytes: publishEncryptedBytes.bind(null, provider),
+    readBytes: readEncryptedBytes.bind(null, provider),
+    publishText: publishEncryptedText.bind(null, provider),
+    readText: readEncryptedText.bind(null, provider),
+    publishJson: publishEncryptedJson.bind(null, provider),
+    readJson: readEncryptedJson.bind(null, provider),
+    readEnvelope: readEncryptedEnvelope.bind(null, provider)
+  };
+  const lookup = {
+    create: (options) => createKeyedLookup(provider, options)
+  };
   return {
     provider,
     requestAccess: () => callSwarm(provider, "swarm_requestAccess"),
@@ -1315,6 +1600,8 @@ function createSwarmKit(provider = getWindowSwarm()) {
     did,
     hashChain,
     multiWriterFeed,
+    crypto,
+    lookup,
     publishBytes: chunks.publishBytes,
     readBytes: chunks.readBytes,
     publishText: chunks.publishText,
@@ -1350,23 +1637,37 @@ export {
   createEpochFeed,
   createHashChain,
   createIndexedSocStream,
+  createKeyedLookup,
   createMultiWriterFeed,
   createSwarmKit,
+  decryptBytes,
+  decryptJson,
+  decryptText,
+  deriveEncryptionKeyFromPassword,
   deriveIdentifier,
   detectWindowSwarm,
   didDocumentIdentifier,
   didDocumentRevisionIdentifier,
+  encryptBytes,
+  encryptJson,
+  encryptText,
+  exportEncryptionKey,
   findLatestContiguousIndex,
+  generateEncryptionKey,
   getSigningIdentity,
   getSwarmErrorReason,
   getWindowSwarm,
   hexToBytes,
+  importEncryptionKey,
   isSwarmReason,
   jsonToBytes,
   keccakHex,
   normalizeBytes,
   normalizeError,
   publishBytes,
+  publishEncryptedBytes,
+  publishEncryptedJson,
+  publishEncryptedText,
   publishJson,
   publishObjectBytes,
   publishObjectJson,
@@ -1374,6 +1675,10 @@ export {
   publishText,
   readBytes,
   readDidDocument,
+  readEncryptedBytes,
+  readEncryptedEnvelope,
+  readEncryptedJson,
+  readEncryptedText,
   readJson,
   readObjectBytes,
   readObjectJson,
