@@ -122,6 +122,11 @@
       width: 100%;
       min-height: 44px;
     }
+    .section-divider {
+      border: 0;
+      border-top: 1px solid #33352f;
+      margin: 20px 0;
+    }
     @media (max-width: 800px) {
       body { padding: 18px; }
       header { display: block; }
@@ -200,9 +205,24 @@
   <section id="panel-crypto" class="panel">
     <div class="grid">
       <div>
+        <label for="public-crypto-public-key">Recipient Public Key</label>
+        <textarea id="public-crypto-public-key" style="min-height: 86px;"></textarea>
+        <label for="public-crypto-private-key">Recipient Private Key</label>
+        <textarea id="public-crypto-private-key" style="min-height: 86px;"></textarea>
+        <label for="public-crypto-payload">Public-Key JSON</label>
+        <textarea id="public-crypto-payload">{"secret":"hello recipient"}</textarea>
+        <div class="actions">
+          <button class="requires-provider" id="public-crypto-generate" disabled>Generate Keypair</button>
+          <button class="requires-provider secondary" id="public-crypto-publish" disabled>Publish For Recipient</button>
+          <button class="requires-provider secondary" id="public-crypto-read" disabled>Read For Recipient</button>
+          <button class="requires-provider secondary" id="public-crypto-wrong-key" disabled>Try Wrong Key</button>
+        </div>
+
+        <hr class="section-divider">
+
         <label for="crypto-key">Key</label>
         <textarea id="crypto-key" style="min-height: 86px;"></textarea>
-        <label for="crypto-payload">JSON</label>
+        <label for="crypto-payload">Symmetric JSON</label>
         <textarea id="crypto-payload">{"secret":"hello swarm"}</textarea>
         <div class="actions">
           <button class="requires-provider" id="crypto-generate" disabled>Generate Key</button>
@@ -331,6 +351,7 @@
     let owner = '';
     let lastObjectReference = '';
     let lastEncryptedReference = '';
+    let lastPublicEncryptedReference = '';
 
     const stringify = (value) => typeof value === 'string'
       ? value
@@ -407,6 +428,12 @@
       const key = $('crypto-key').value.trim();
       if (!key) throw new Error('No encryption key');
       return kit.crypto.importKey(key);
+    }
+
+    function parseJwk(id) {
+      const value = $(id).value.trim();
+      if (!value) throw new Error('Missing JWK');
+      return JSON.parse(value);
     }
 
     function addKnownWriter(writer) {
@@ -516,6 +543,51 @@
           show(outputs.crypto, { key: exported });
         } catch (error) {
           showError(outputs.crypto, error);
+        }
+      };
+
+      $('public-crypto-generate').onclick = async () => {
+        try {
+          const keyPair = await kit.crypto.generateKeyPair();
+          const publicKey = await kit.crypto.exportPublicKey(keyPair.publicKey);
+          const privateKey = await kit.crypto.exportPrivateKey(keyPair.privateKey);
+          $('public-crypto-public-key').value = JSON.stringify(publicKey, null, 2);
+          $('public-crypto-private-key').value = JSON.stringify(privateKey, null, 2);
+          show(outputs.crypto, { publicKey, privateKey });
+        } catch (error) {
+          showError(outputs.crypto, error);
+        }
+      };
+
+      $('public-crypto-publish').onclick = async () => {
+        try {
+          const publicKey = parseJwk('public-crypto-public-key');
+          const result = await kit.crypto.publishJsonFor(parseJson('public-crypto-payload'), publicKey);
+          lastPublicEncryptedReference = result.reference;
+          show(outputs.crypto, result);
+        } catch (error) {
+          showError(outputs.crypto, error);
+        }
+      };
+
+      $('public-crypto-read').onclick = async () => {
+        try {
+          if (!lastPublicEncryptedReference) throw new Error('No public-key encrypted reference yet');
+          const privateKey = parseJwk('public-crypto-private-key');
+          show(outputs.crypto, await kit.crypto.readJsonFrom(lastPublicEncryptedReference, privateKey));
+        } catch (error) {
+          showError(outputs.crypto, error);
+        }
+      };
+
+      $('public-crypto-wrong-key').onclick = async () => {
+        try {
+          if (!lastPublicEncryptedReference) throw new Error('No public-key encrypted reference yet');
+          const wrongKeyPair = await kit.crypto.generateKeyPair();
+          await kit.crypto.readJsonFrom(lastPublicEncryptedReference, wrongKeyPair.privateKey);
+          show(outputs.crypto, 'Unexpected decrypt success', false);
+        } catch (error) {
+          show(outputs.crypto, `Expected failure: ${error?.message ?? error}`);
         }
       };
 
