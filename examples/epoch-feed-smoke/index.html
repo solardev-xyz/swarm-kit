@@ -151,6 +151,7 @@
     <button class="tab active" data-panel="epoch">Epoch Feed</button>
     <button class="tab" data-panel="objects">Objects</button>
     <button class="tab" data-panel="crypto">Encryption</button>
+    <button class="tab" data-panel="signed">Signed Docs</button>
     <button class="tab" data-panel="did">DID Document</button>
     <button class="tab" data-panel="hash">Hash Chain</button>
     <button class="tab" data-panel="multi">Multi-Writer</button>
@@ -231,6 +232,30 @@
         </div>
       </div>
       <pre id="crypto-output" class="result">-</pre>
+    </div>
+  </section>
+
+  <section id="panel-signed" class="panel">
+    <div class="grid">
+      <div>
+        <label for="signed-wallet">Wallet</label>
+        <input id="signed-wallet" placeholder="0x...">
+        <label for="signed-subject">Subject</label>
+        <input id="signed-subject" value="wallet:">
+        <label for="signed-payload">Profile Document</label>
+        <textarea id="signed-payload">{
+  "type": "swarm-kit:profile",
+  "encryptionPublicKey": "paste-recipient-public-key-here",
+  "delivery": []
+}</textarea>
+        <div class="actions">
+          <button id="signed-wallet-connect">Connect Wallet</button>
+          <button class="requires-provider secondary" id="signed-publish" disabled>Sign + Publish</button>
+          <button class="requires-provider secondary" id="signed-read" disabled>Read + Verify</button>
+          <button class="requires-provider secondary" id="signed-tamper" disabled>Tamper Check</button>
+        </div>
+      </div>
+      <pre id="signed-output" class="result">-</pre>
     </div>
   </section>
 
@@ -341,6 +366,7 @@
       epoch: $('epoch-output'),
       objects: $('object-output'),
       crypto: $('crypto-output'),
+      signed: $('signed-output'),
       did: $('did-output'),
       hash: $('hash-output'),
       multi: $('multi-output'),
@@ -352,6 +378,7 @@
     let lastObjectReference = '';
     let lastEncryptedReference = '';
     let lastPublicEncryptedReference = '';
+    let lastSignedReference = '';
 
     const stringify = (value) => typeof value === 'string'
       ? value
@@ -422,6 +449,25 @@
       return kit.lookup.create({
         namespace: $('lookup-namespace').value.trim() || 'swarm-kit-playground-lookup',
       });
+    }
+
+    function ethereumProvider() {
+      const ethereum = globalThis.ethereum;
+      if (!ethereum?.request) throw new Error('window.ethereum provider is not available');
+      return ethereum;
+    }
+
+    async function ensureWalletAddress() {
+      const current = $('signed-wallet').value.trim();
+      if (/^0x[0-9a-fA-F]{40}$/.test(current)) return current;
+      const accounts = await ethereumProvider().request({ method: 'eth_requestAccounts' });
+      const address = accounts?.[0];
+      if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+        throw new Error('No Ethereum wallet account returned');
+      }
+      $('signed-wallet').value = address;
+      $('signed-subject').value = `wallet:${address}`;
+      return address;
     }
 
     async function importPlaygroundKey() {
@@ -608,6 +654,66 @@
           show(outputs.crypto, await kit.crypto.readJson(lastEncryptedReference, await importPlaygroundKey()));
         } catch (error) {
           showError(outputs.crypto, error);
+        }
+      };
+
+      $('signed-wallet-connect').onclick = async () => {
+        try {
+          const address = await ensureWalletAddress();
+          show(outputs.signed, { wallet: address });
+        } catch (error) {
+          showError(outputs.signed, error);
+        }
+      };
+
+      $('signed-publish').onclick = async () => {
+        try {
+          const address = await ensureWalletAddress();
+          const signer = kit.signedDocuments.createEip1193PersonalSigner(ethereumProvider(), { address });
+          const result = await kit.signedDocuments.publish(parseJson('signed-payload'), {
+            subject: $('signed-subject').value.trim() || `wallet:${address}`,
+            signer,
+          });
+          lastSignedReference = result.reference;
+          show(outputs.signed, result);
+        } catch (error) {
+          showError(outputs.signed, error);
+        }
+      };
+
+      $('signed-read').onclick = async () => {
+        try {
+          if (!lastSignedReference) throw new Error('No signed document reference yet');
+          const address = await ensureWalletAddress();
+          const result = await kit.signedDocuments.readAndVerify(
+            lastSignedReference,
+            kit.signedDocuments.createEthereumPersonalVerifier({ address }),
+          );
+          show(outputs.signed, result);
+        } catch (error) {
+          showError(outputs.signed, error);
+        }
+      };
+
+      $('signed-tamper').onclick = async () => {
+        try {
+          if (!lastSignedReference) throw new Error('No signed document reference yet');
+          const address = await ensureWalletAddress();
+          const envelope = await kit.signedDocuments.read(lastSignedReference);
+          const tampered = {
+            ...envelope,
+            payload: {
+              ...envelope.payload,
+              tampered: true,
+            },
+          };
+          const ok = await kit.signedDocuments.verify(
+            tampered,
+            kit.signedDocuments.createEthereumPersonalVerifier({ address }),
+          );
+          show(outputs.signed, { verified: ok, expected: false }, ok === false);
+        } catch (error) {
+          showError(outputs.signed, error);
         }
       };
 

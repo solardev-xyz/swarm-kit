@@ -59,6 +59,7 @@ import {
   assertSignedDocument,
   createEip1193PersonalSigner,
   createEip191PersonalVerifier,
+  createEthereumPersonalVerifier,
   createP256DocumentSigner,
   createP256DocumentVerifier,
   exportP256PrivateSigningKey,
@@ -176,6 +177,7 @@ export function createSwarmKit(provider: SwarmProvider = getWindowSwarm()) {
     createP256Verifier: createP256DocumentVerifier,
     createEip1193PersonalSigner,
     createEip191PersonalVerifier,
+    createEthereumPersonalVerifier,
   };
 
   return {

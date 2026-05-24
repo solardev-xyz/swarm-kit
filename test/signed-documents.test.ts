@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   createEip1193PersonalSigner,
   createEip191PersonalVerifier,
+  createEthereumPersonalVerifier,
   createP256DocumentSigner,
   createP256DocumentVerifier,
   createSwarmKit,
@@ -13,6 +14,8 @@ import {
 } from '../src/index.js';
 import { bytesToUtf8 } from '../src/bytes.js';
 import { MockSwarmProvider } from './mock-provider.js';
+import { privateKeyToAccount } from 'viem/accounts';
+import type { Hex } from 'viem';
 
 describe('signed documents', () => {
   test('signs and verifies JSON payloads with P-256 keys', async () => {
@@ -135,5 +138,30 @@ describe('signed documents', () => {
     };
 
     await expect(verifySignedDocument(envelope, verifier)).resolves.toBe(true);
+  });
+
+  test('verifies EIP-191 personal signatures with viem', async () => {
+    const account = privateKeyToAccount('0x59c6995e998f97a5a004497e5daacf503c8039aa006d9b2fa46f77d9cb5842d9');
+    const eip1193 = {
+      request: async ({ method, params }: { method: string; params?: unknown[] }) => {
+        expect(method).toBe('personal_sign');
+        const [raw, address] = params as [Hex, string];
+        expect(address.toLowerCase()).toBe(account.address.toLowerCase());
+        return account.signMessage({ message: { raw } });
+      },
+    };
+    const signer = createEip1193PersonalSigner(eip1193, { address: account.address });
+    const envelope = await signDocument({ walletBound: true }, {
+      subject: `wallet:${account.address}`,
+      signer,
+      signedAt: '2026-05-24T12:00:00.000Z',
+    });
+
+    await expect(verifySignedDocument(envelope, createEthereumPersonalVerifier({
+      address: account.address,
+    }))).resolves.toBe(true);
+    await expect(verifySignedDocument(envelope, createEthereumPersonalVerifier({
+      address: '0x0000000000000000000000000000000000000001',
+    }))).resolves.toBe(false);
   });
 });

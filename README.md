@@ -203,8 +203,9 @@ console.log(value)
 
 Signed documents bind a JSON payload to a subject string with canonical signing
 bytes. Swarm Kit includes Web Crypto P-256 sign/verify helpers and an EIP-1193
-`personal_sign` signer adapter for wallet-bound documents. Ethereum recovery is
-provided as an adapter hook so apps can use their preferred wallet library.
+`personal_sign` signer adapter for wallet-bound documents. Ethereum
+`personal_sign` verification is backed by `viem`; apps can still use the lower
+level EIP-191 verifier hook if they want to provide their own recovery logic.
 
 ```ts
 const signingKey = await kit.signedDocuments.generateP256KeyPair()
@@ -237,6 +238,13 @@ const envelope = await kit.signedDocuments.sign(profile, {
   subject: `wallet:${walletAddress}`,
   signer,
 })
+
+const ok = await kit.signedDocuments.verify(
+  envelope,
+  kit.signedDocuments.createEthereumPersonalVerifier({
+    address: walletAddress,
+  }),
+)
 ```
 
 ## DID-Style Documents

@@ -8,6 +8,7 @@ import {
   type PublishObjectResult,
 } from './objects.js';
 import type { SwarmProvider } from './provider.js';
+import { verifyMessage, type Address, type Hex } from 'viem';
 
 export type SignatureBytes = Uint8Array | ArrayBuffer;
 export type MaybePromise<T> = T | Promise<T>;
@@ -81,6 +82,10 @@ export type Eip191PersonalRecoverAddress = (
   message: Uint8Array,
   signature: Uint8Array,
 ) => MaybePromise<string>;
+
+export interface EthereumPersonalVerifierOptions {
+  address?: string;
+}
 
 const SIGNED_DOCUMENT_PAYLOAD_TYPE = 'swarm-kit:signed-document-payload';
 const SIGNED_DOCUMENT_SIGNATURE_ENCODING = 'base64';
@@ -273,6 +278,24 @@ export function createEip191PersonalVerifier(
       const recovered = normalizeAddress(await recoverAddress(bytes, signature));
       const signer = normalizeAddress(envelope.signature.signer);
       return recovered === signer && (normalizedExpected === null || recovered === normalizedExpected);
+    },
+  };
+}
+
+export function createEthereumPersonalVerifier(
+  options: EthereumPersonalVerifierOptions = {},
+): SignedDocumentVerifier {
+  const expected = options.address ? normalizeAddress(options.address) : null;
+  return {
+    verify: async ({ envelope, bytes, signature }) => {
+      if (envelope.signature.scheme !== EIP_191_PERSONAL_SIGN_SCHEME) return false;
+      const signer = normalizeAddress(envelope.signature.signer);
+      if (expected !== null && signer !== expected) return false;
+      return verifyMessage({
+        address: signer as Address,
+        message: { raw: bytes },
+        signature: `0x${bytesToHex(signature)}` as Hex,
+      });
     },
   };
 }
