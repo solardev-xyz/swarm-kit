@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Swarm Provider Compliance</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fa;
+      --surface: #ffffff;
+      --surface-soft: #edf2f7;
+      --border: #d6dee8;
+      --text: #14202c;
+      --muted: #627184;
+      --accent: #2563eb;
+      --accent-dark: #1d4ed8;
+      --pass: #047857;
+      --fail: #b91c1c;
+      --skip: #805f00;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button {
+      border: 0;
+      border-radius: 7px;
+      padding: 10px 13px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.52;
+    }
+
+    .primary {
+      color: white;
+      background: var(--accent);
+    }
+
+    .primary:hover:not(:disabled) { background: var(--accent-dark); }
+
+    .secondary {
+      color: var(--text);
+      background: var(--surface-soft);
+      border: 1px solid var(--border);
+    }
+
+    .app {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    h1, h2, p { margin: 0; }
+
+    h1 { font-size: 28px; }
+    h2 { font-size: 15px; }
+
+    .muted {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 3px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .status {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .tile {
+      min-height: 86px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 12px;
+    }
+
+    .tile strong {
+      display: block;
+      font-size: 24px;
+      line-height: 1.2;
+    }
+
+    .tile span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .provider {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 0.55fr);
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 14px;
+    }
+
+    .panel pre,
+    .result pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .results {
+      display: grid;
+      gap: 8px;
+    }
+
+    .result {
+      border: 1px solid var(--border);
+      border-left-width: 5px;
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 12px;
+    }
+
+    .result.pass { border-left-color: var(--pass); }
+    .result.fail { border-left-color: var(--fail); }
+    .result.skip { border-left-color: var(--skip); }
+
+    .result-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .badge {
+      min-width: 54px;
+      text-align: center;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .badge.pass { color: var(--pass); background: #d1fae5; }
+    .badge.fail { color: var(--fail); background: #fee2e2; }
+    .badge.skip { color: var(--skip); background: #fef3c7; }
+
+    .empty {
+      min-height: 280px;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+    }
+
+    @media (max-width: 860px) {
+      .app { padding: 16px; }
+      .topbar,
+      .provider {
+        grid-template-columns: 1fr;
+        display: grid;
+      }
+      .actions { justify-content: start; }
+      .status { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <h1>Provider Compliance</h1>
+        <p class="muted">Swarm Kit contract checks for the injected provider</p>
+      </div>
+      <div class="actions">
+        <button id="detect" class="secondary" type="button">Detect</button>
+        <button id="connect" class="secondary" type="button">Connect</button>
+        <button id="run" class="primary" type="button">Run</button>
+        <button id="copy" class="secondary" type="button" disabled>Copy JSON</button>
+      </div>
+    </header>
+
+    <section class="status" aria-label="Compliance summary">
+      <div class="tile">
+        <strong id="passed">0</strong>
+        <span>Passed</span>
+      </div>
+      <div class="tile">
+        <strong id="failed">0</strong>
+        <span>Failed</span>
+      </div>
+      <div class="tile">
+        <strong id="skipped">0</strong>
+        <span>Skipped</span>
+      </div>
+      <div class="tile">
+        <strong id="total">0</strong>
+        <span>Total</span>
+      </div>
+    </section>
+
+    <section class="provider">
+      <div class="panel">
+        <h2>Provider</h2>
+        <pre id="provider-state">Waiting for window.swarm...</pre>
+      </div>
+      <div class="panel">
+        <h2>Run</h2>
+        <pre id="run-state">No run yet</pre>
+      </div>
+    </section>
+
+    <section id="results" class="results">
+      <div class="panel empty">Run the checks to see results</div>
+    </section>
+  </main>
+
+  <script type="module">
+    import {
+      callSwarm,
+      runSwarmProviderCompliance,
+      waitForSwarm
+    } from './swarm-kit.js';
+
+    const state = {
+      provider: null,
+      report: null
+    };
+
+    const $ = id => document.getElementById(id);
+
+    $('detect').onclick = () => detectProvider();
+    $('connect').onclick = () => runUiAction(connectProvider);
+    $('run').onclick = () => runUiAction(runCompliance);
+    $('copy').onclick = () => runUiAction(copyReport);
+
+    detectProvider();
+
+    async function detectProvider() {
+      setProviderState('Waiting for window.swarm...');
+      try {
+        state.provider = await waitForSwarm({
+          requireFreedomBrowser: true,
+          timeoutMs: 10000
+        });
+        setProviderState({
+          detected: true,
+          isFreedomBrowser: state.provider.isFreedomBrowser === true,
+          origin: location.origin
+        });
+      } catch (error) {
+        state.provider = null;
+        setProviderState({
+          detected: false,
+          error: formatError(error)
+        });
+      }
+    }
+
+    async function connectProvider() {
+      const provider = await ensureProvider();
+      const result = await callSwarm(provider, 'swarm_requestAccess');
+      setProviderState({
+        connected: true,
+        result
+      });
+    }
+
+    async function runCompliance() {
+      const provider = await ensureProvider();
+      setBusy(true);
+      setRunState('Running...');
+      try {
+        const report = await runSwarmProviderCompliance(provider);
+        state.report = {
+          ...report,
+          environment: {
+            origin: location.origin,
+            userAgent: navigator.userAgent,
+            isFreedomBrowser: provider.isFreedomBrowser === true
+          }
+        };
+        renderReport(state.report);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function copyReport() {
+      if (!state.report) return;
+      await navigator.clipboard.writeText(JSON.stringify(state.report, null, 2));
+      setRunState({
+        copied: true,
+        finishedAt: state.report.finishedAt,
+        summary: state.report.summary
+      });
+    }
+
+    async function ensureProvider() {
+      if (state.provider) return state.provider;
+      await detectProvider();
+      if (!state.provider) throw new Error('window.swarm provider is not available');
+      return state.provider;
+    }
+
+    async function runUiAction(action) {
+      try {
+        await action();
+      } catch (error) {
+        setRunState({
+          error: formatError(error)
+        });
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function renderReport(report) {
+      const summary = report.summary;
+      $('passed').textContent = String(summary.passed);
+      $('failed').textContent = String(summary.failed);
+      $('skipped').textContent = String(summary.skipped);
+      $('total').textContent = String(summary.total);
+      $('copy').disabled = false;
+      setRunState({
+        runId: report.runId,
+        startedAt: report.startedAt,
+        finishedAt: report.finishedAt,
+        summary
+      });
+
+      const results = $('results');
+      results.textContent = '';
+      for (const item of report.results) {
+        results.append(renderResult(item));
+      }
+    }
+
+    function renderResult(item) {
+      const article = document.createElement('article');
+      article.className = `result ${item.status}`;
+
+      const header = document.createElement('div');
+      header.className = 'result-header';
+
+      const title = document.createElement('h2');
+      title.textContent = item.label;
+      header.append(title);
+
+      const badge = document.createElement('span');
+      badge.className = `badge ${item.status}`;
+      badge.textContent = item.status;
+      header.append(badge);
+
+      const body = document.createElement('pre');
+      body.textContent = JSON.stringify({
+        id: item.id,
+        durationMs: item.durationMs,
+        details: item.details,
+        error: item.error
+      }, null, 2);
+
+      article.append(header, body);
+      return article;
+    }
+
+    function setProviderState(value) {
+      $('provider-state').textContent = typeof value === 'string'
+        ? value
+        : JSON.stringify(value, null, 2);
+    }
+
+    function setRunState(value) {
+      $('run-state').textContent = typeof value === 'string'
+        ? value
+        : JSON.stringify(value, null, 2);
+    }
+
+    function setBusy(busy) {
+      $('run').disabled = busy;
+      $('connect').disabled = busy;
+      $('detect').disabled = busy;
+    }
+
+    function formatError(error) {
+      return {
+        message: error?.message ?? String(error),
+        code: error?.code,
+        reason: error?.data?.reason,
+        data: error?.data
+      };
+    }
+  </script>
+</body>
+</html>

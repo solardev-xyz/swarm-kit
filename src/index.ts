@@ -11,5 +11,6 @@ export * from './indexed-soc.js';
 export * from './lookup.js';
 export * from './multi-writer-feed.js';
 export * from './objects.js';
+export * from './provider-compliance.js';
 export * from './provider.js';
 export * from './soc.js';

@@ -18,12 +18,14 @@
     "README.md"
   ],
   "scripts": {
-    "build": "npm run build:lib && npm run build:playground",
+    "build": "npm run build:lib && npm run build:playground && npm run build:provider-compliance",
     "build:lib": "tsc -p tsconfig.json",
     "build:playground": "esbuild src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=examples/epoch-feed-smoke/swarm-kit.js",
+    "build:provider-compliance": "esbuild src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=examples/provider-compliance/swarm-kit.js",
     "build:epoch-feed-smoke": "npm run build:playground",
     "dev:playground": "node scripts/dev-epoch-feed-smoke.mjs",
     "dev:epoch-feed-smoke": "npm run dev:playground",
+    "dev:provider-compliance": "node scripts/dev-provider-compliance.mjs",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

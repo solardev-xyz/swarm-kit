@@ -29,9 +29,10 @@ npm test
 npm run build
 ```
 
-`npm run build` also refreshes the self-contained browser bundle used by the
-playground in `examples/epoch-feed-smoke`. After building, upload that example
-folder to Swarm and open the resulting `bzz://...` URL in Freedom Browser.
+`npm run build` also refreshes the self-contained browser bundles used by the
+playground in `examples/epoch-feed-smoke` and provider compliance page in
+`examples/provider-compliance`. After building, upload either example folder to
+Swarm and open the resulting `bzz://...` URL in Freedom Browser.
 
 For local Freedom Browser smoke testing without uploading first:
 
@@ -41,6 +42,17 @@ npm run dev:playground
 
 Then open `http://127.0.0.1:4173/` in Freedom Browser. Use
 `PORT=4174 npm run dev:playground` if the default port is busy.
+
+For provider contract checks against the real injected `window.swarm`:
+
+```sh
+npm run dev:provider-compliance
+```
+
+Then open `http://127.0.0.1:4175/` in Freedom Browser and run the checks. The
+compliance page writes small test CAC/SOC chunks and verifies provider behavior
+that higher-level Swarm Kit structures depend on, including missing-read
+normalization and CAC/SOC type mismatch errors.
 
 ## Basic Usage
 
@@ -295,6 +307,7 @@ console.log(current?.value, latest?.value)
 - keyed lookup stream helper
 - deterministic identifier derivation using Keccak-256
 - epoch-feed helper
+- browser-runnable provider compliance checks
 - in-memory mock provider tests
 
 Not included yet:
