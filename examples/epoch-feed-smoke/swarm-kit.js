@@ -938,11 +938,16 @@ function sameEnvelope(a, b) {
 
 // src/encryption.ts
 var AES_GCM = "AES-GCM";
+var ECDH = "ECDH";
+var ECDH_NAMED_CURVE = "P-256";
+var HKDF = "HKDF";
 var AES_KEY_LENGTH = 256;
 var NONCE_BYTES = 12;
 var SALT_BYTES = 16;
 var DEFAULT_PBKDF2_ITERATIONS = 21e4;
 var DEFAULT_PBKDF2_HASH = "SHA-256";
+var PUBLIC_KEY_ENCRYPTION_ALGORITHM = "ECDH-P256-HKDF-SHA-256-AES-GCM";
+var PUBLIC_KEY_INFO = utf8ToBytes("swarm-kit:public-key-encryption:v1");
 async function generateEncryptionKey() {
   return getSubtle().generateKey(
     { name: AES_GCM, length: AES_KEY_LENGTH },
@@ -959,6 +964,37 @@ async function importEncryptionKey(key) {
     throw new Error("AES-GCM keys must be 32 bytes");
   }
   return getSubtle().importKey("raw", toArrayBuffer(bytes), AES_GCM, true, ["encrypt", "decrypt"]);
+}
+async function generateEncryptionKeyPair(options = {}) {
+  return getSubtle().generateKey(
+    { name: ECDH, namedCurve: ECDH_NAMED_CURVE },
+    options.extractable ?? true,
+    ["deriveBits"]
+  );
+}
+async function exportPublicEncryptionKey(key) {
+  return getSubtle().exportKey("jwk", key);
+}
+async function importPublicEncryptionKey(key) {
+  return getSubtle().importKey(
+    "jwk",
+    key,
+    { name: ECDH, namedCurve: ECDH_NAMED_CURVE },
+    true,
+    []
+  );
+}
+async function exportPrivateEncryptionKey(key) {
+  return getSubtle().exportKey("jwk", key);
+}
+async function importPrivateEncryptionKey(key, options = {}) {
+  return getSubtle().importKey(
+    "jwk",
+    key,
+    { name: ECDH, namedCurve: ECDH_NAMED_CURVE },
+    options.extractable ?? true,
+    ["deriveBits"]
+  );
 }
 async function deriveEncryptionKeyFromPassword(password, options = {}) {
   const saltBytes = options.salt === void 0 ? randomBytes(SALT_BYTES) : typeof options.salt === "string" ? base64ToBytes(options.salt) : normalizeBytes(options.salt);
@@ -1035,6 +1071,63 @@ async function encryptJson(value, key) {
 async function decryptJson(envelope, key) {
   return bytesToJson(await decryptBytes(envelope, key));
 }
+async function encryptBytesFor(bytes, recipientPublicKey) {
+  const plaintext = normalizeBytes(bytes);
+  const publicKey = await resolvePublicEncryptionKey(recipientPublicKey);
+  const ephemeral = await generateEncryptionKeyPair({ extractable: true });
+  const salt = randomBytes(SALT_BYTES);
+  const nonce = randomBytes(NONCE_BYTES);
+  const contentKey = await derivePublicKeyContentKey(ephemeral.privateKey, publicKey, salt);
+  const ciphertext = new Uint8Array(await getSubtle().encrypt(
+    { name: AES_GCM, iv: toArrayBuffer(nonce) },
+    contentKey,
+    toArrayBuffer(plaintext)
+  ));
+  return {
+    version: 1,
+    type: "swarm-kit:public-key-encrypted-bytes",
+    algorithm: PUBLIC_KEY_ENCRYPTION_ALGORITHM,
+    keyAgreement: "ECDH-P256",
+    kdf: "HKDF-SHA-256",
+    contentEncryption: "AES-GCM",
+    ephemeralPublicKey: await exportPublicEncryptionKey(ephemeral.publicKey),
+    salt: bytesToBase64(salt),
+    nonce: bytesToBase64(nonce),
+    ciphertext: bytesToBase64(ciphertext),
+    plaintextSize: plaintext.length
+  };
+}
+async function decryptBytesFrom(envelope, recipientPrivateKey) {
+  validatePublicKeyEncryptedEnvelope(envelope);
+  const privateKey = await resolvePrivateEncryptionKey(recipientPrivateKey);
+  const ephemeralPublicKey = await importPublicEncryptionKey(envelope.ephemeralPublicKey);
+  const contentKey = await derivePublicKeyContentKey(
+    privateKey,
+    ephemeralPublicKey,
+    base64ToBytes(envelope.salt)
+  );
+  const plaintext = new Uint8Array(await getSubtle().decrypt(
+    { name: AES_GCM, iv: toArrayBuffer(base64ToBytes(envelope.nonce)) },
+    contentKey,
+    toArrayBuffer(base64ToBytes(envelope.ciphertext))
+  ));
+  if (plaintext.length !== envelope.plaintextSize) {
+    throw new Error("Public-key encrypted object plaintext size mismatch");
+  }
+  return plaintext;
+}
+async function encryptTextFor(text, recipientPublicKey) {
+  return encryptBytesFor(utf8ToBytes(text), recipientPublicKey);
+}
+async function decryptTextFrom(envelope, recipientPrivateKey) {
+  return bytesToUtf8(await decryptBytesFrom(envelope, recipientPrivateKey));
+}
+async function encryptJsonFor(value, recipientPublicKey) {
+  return encryptBytesFor(jsonToBytes(value), recipientPublicKey);
+}
+async function decryptJsonFrom(envelope, recipientPrivateKey) {
+  return bytesToJson(await decryptBytesFrom(envelope, recipientPrivateKey));
+}
 async function publishEncryptedBytes(provider, bytes, key, options = {}) {
   const envelope = await encryptBytes(bytes, key);
   return publishEncryptedEnvelope(provider, envelope, options);
@@ -1061,7 +1154,41 @@ async function readEncryptedEnvelope(provider, reference, options = {}) {
   validateEncryptedEnvelope(envelope);
   return envelope;
 }
+async function publishEncryptedBytesFor(provider, bytes, recipientPublicKey, options = {}) {
+  const envelope = await encryptBytesFor(bytes, recipientPublicKey);
+  return publishPublicKeyEncryptedEnvelope(provider, envelope, options);
+}
+async function readEncryptedBytesFrom(provider, reference, recipientPrivateKey, options = {}) {
+  return decryptBytesFrom(await readPublicKeyEncryptedEnvelope(provider, reference, options), recipientPrivateKey);
+}
+async function publishEncryptedTextFor(provider, text, recipientPublicKey, options = {}) {
+  const envelope = await encryptTextFor(text, recipientPublicKey);
+  return publishPublicKeyEncryptedEnvelope(provider, envelope, options);
+}
+async function readEncryptedTextFrom(provider, reference, recipientPrivateKey, options = {}) {
+  return decryptTextFrom(await readPublicKeyEncryptedEnvelope(provider, reference, options), recipientPrivateKey);
+}
+async function publishEncryptedJsonFor(provider, value, recipientPublicKey, options = {}) {
+  const envelope = await encryptJsonFor(value, recipientPublicKey);
+  return publishPublicKeyEncryptedEnvelope(provider, envelope, options);
+}
+async function readEncryptedJsonFrom(provider, reference, recipientPrivateKey, options = {}) {
+  return decryptJsonFrom(await readPublicKeyEncryptedEnvelope(provider, reference, options), recipientPrivateKey);
+}
+async function readPublicKeyEncryptedEnvelope(provider, reference, options = {}) {
+  const envelope = await readObjectJson(provider, reference, options);
+  validatePublicKeyEncryptedEnvelope(envelope);
+  return envelope;
+}
 function publishEncryptedEnvelope(provider, envelope, options) {
+  return publishObjectJson(provider, envelope, options).then((published) => ({
+    ...published,
+    plaintextSize: envelope.plaintextSize,
+    ciphertextSize: base64ToBytes(envelope.ciphertext).length,
+    envelope
+  }));
+}
+function publishPublicKeyEncryptedEnvelope(provider, envelope, options) {
   return publishObjectJson(provider, envelope, options).then((published) => ({
     ...published,
     plaintextSize: envelope.plaintextSize,
@@ -1073,6 +1200,49 @@ function validateEncryptedEnvelope(envelope) {
   if (envelope.version !== 1 || envelope.type !== "swarm-kit:encrypted-bytes" || envelope.algorithm !== "AES-GCM" || envelope.keyLength !== AES_KEY_LENGTH || typeof envelope.nonce !== "string" || base64ToBytes(envelope.nonce).length !== NONCE_BYTES || typeof envelope.ciphertext !== "string" || typeof envelope.plaintextSize !== "number" || !Number.isSafeInteger(envelope.plaintextSize) || envelope.plaintextSize < 0) {
     throw new Error("Invalid encrypted object envelope");
   }
+}
+function validatePublicKeyEncryptedEnvelope(envelope) {
+  if (envelope.version !== 1 || envelope.type !== "swarm-kit:public-key-encrypted-bytes" || envelope.algorithm !== PUBLIC_KEY_ENCRYPTION_ALGORITHM || envelope.keyAgreement !== "ECDH-P256" || envelope.kdf !== "HKDF-SHA-256" || envelope.contentEncryption !== "AES-GCM" || !isP256PublicJwk(envelope.ephemeralPublicKey) || typeof envelope.salt !== "string" || base64ToBytes(envelope.salt).length !== SALT_BYTES || typeof envelope.nonce !== "string" || base64ToBytes(envelope.nonce).length !== NONCE_BYTES || typeof envelope.ciphertext !== "string" || typeof envelope.plaintextSize !== "number" || !Number.isSafeInteger(envelope.plaintextSize) || envelope.plaintextSize < 0) {
+    throw new Error("Invalid public-key encrypted object envelope");
+  }
+}
+async function derivePublicKeyContentKey(privateKey, publicKey, salt) {
+  const sharedSecret = new Uint8Array(await getSubtle().deriveBits(
+    { name: ECDH, public: publicKey },
+    privateKey,
+    AES_KEY_LENGTH
+  ));
+  const hkdfKey = await getSubtle().importKey(
+    "raw",
+    toArrayBuffer(sharedSecret),
+    HKDF,
+    false,
+    ["deriveKey"]
+  );
+  return getSubtle().deriveKey(
+    {
+      name: HKDF,
+      hash: "SHA-256",
+      salt: toArrayBuffer(salt),
+      info: toArrayBuffer(PUBLIC_KEY_INFO)
+    },
+    hkdfKey,
+    { name: AES_GCM, length: AES_KEY_LENGTH },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+async function resolvePublicEncryptionKey(key) {
+  return isCryptoKey(key) ? key : importPublicEncryptionKey(key);
+}
+async function resolvePrivateEncryptionKey(key) {
+  return isCryptoKey(key) ? key : importPrivateEncryptionKey(key);
+}
+function isCryptoKey(key) {
+  return typeof key === "object" && key !== null && "algorithm" in key && "extractable" in key && "type" in key && "usages" in key;
+}
+function isP256PublicJwk(key) {
+  return key !== null && typeof key === "object" && key.kty === "EC" && key.crv === ECDH_NAMED_CURVE && typeof key.x === "string" && typeof key.y === "string";
 }
 function randomBytes(size) {
   const bytes = new Uint8Array(size);
@@ -1572,19 +1742,37 @@ function createSwarmKit(provider = getWindowSwarm()) {
     exportKey: exportEncryptionKey,
     importKey: importEncryptionKey,
     deriveKeyFromPassword: deriveEncryptionKeyFromPassword,
+    generateKeyPair: generateEncryptionKeyPair,
+    exportPublicKey: exportPublicEncryptionKey,
+    importPublicKey: importPublicEncryptionKey,
+    exportPrivateKey: exportPrivateEncryptionKey,
+    importPrivateKey: importPrivateEncryptionKey,
     encryptBytes,
     decryptBytes,
     encryptText,
     decryptText,
     encryptJson,
     decryptJson,
+    encryptBytesFor,
+    decryptBytesFrom,
+    encryptTextFor,
+    decryptTextFrom,
+    encryptJsonFor,
+    decryptJsonFrom,
     publishBytes: publishEncryptedBytes.bind(null, provider),
     readBytes: readEncryptedBytes.bind(null, provider),
     publishText: publishEncryptedText.bind(null, provider),
     readText: readEncryptedText.bind(null, provider),
     publishJson: publishEncryptedJson.bind(null, provider),
     readJson: readEncryptedJson.bind(null, provider),
-    readEnvelope: readEncryptedEnvelope.bind(null, provider)
+    readEnvelope: readEncryptedEnvelope.bind(null, provider),
+    publishBytesFor: publishEncryptedBytesFor.bind(null, provider),
+    readBytesFrom: readEncryptedBytesFrom.bind(null, provider),
+    publishTextFor: publishEncryptedTextFor.bind(null, provider),
+    readTextFrom: readEncryptedTextFrom.bind(null, provider),
+    publishJsonFor: publishEncryptedJsonFor.bind(null, provider),
+    readJsonFrom: readEncryptedJsonFrom.bind(null, provider),
+    readPublicKeyEnvelope: readPublicKeyEncryptedEnvelope.bind(null, provider)
   };
   const lookup = {
     create: (options) => createKeyedLookup(provider, options)
@@ -1958,24 +2146,35 @@ export {
   createMultiWriterFeed,
   createSwarmKit,
   decryptBytes,
+  decryptBytesFrom,
   decryptJson,
+  decryptJsonFrom,
   decryptText,
+  decryptTextFrom,
   deriveEncryptionKeyFromPassword,
   deriveIdentifier,
   detectWindowSwarm,
   didDocumentIdentifier,
   didDocumentRevisionIdentifier,
   encryptBytes,
+  encryptBytesFor,
   encryptJson,
+  encryptJsonFor,
   encryptText,
+  encryptTextFor,
   exportEncryptionKey,
+  exportPrivateEncryptionKey,
+  exportPublicEncryptionKey,
   findLatestContiguousIndex,
   generateEncryptionKey,
+  generateEncryptionKeyPair,
   getSigningIdentity,
   getSwarmErrorReason,
   getWindowSwarm,
   hexToBytes,
   importEncryptionKey,
+  importPrivateEncryptionKey,
+  importPublicEncryptionKey,
   isSwarmReason,
   jsonToBytes,
   keccakHex,
@@ -1983,8 +2182,11 @@ export {
   normalizeError,
   publishBytes,
   publishEncryptedBytes,
+  publishEncryptedBytesFor,
   publishEncryptedJson,
+  publishEncryptedJsonFor,
   publishEncryptedText,
+  publishEncryptedTextFor,
   publishJson,
   publishObjectBytes,
   publishObjectJson,
@@ -1993,13 +2195,17 @@ export {
   readBytes,
   readDidDocument,
   readEncryptedBytes,
+  readEncryptedBytesFrom,
   readEncryptedEnvelope,
   readEncryptedJson,
+  readEncryptedJsonFrom,
   readEncryptedText,
+  readEncryptedTextFrom,
   readJson,
   readObjectBytes,
   readObjectJson,
   readObjectText,
+  readPublicKeyEncryptedEnvelope,
   readSocBytesByAddress,
   readSocBytesByOwnerAndIdentifier,
   readSocJsonByAddress,

@@ -174,6 +174,31 @@ const derived = await kit.crypto.deriveKeyFromPassword(password)
 const key = derived.key
 ```
 
+## Public-Key Encryption Envelopes
+
+Public-key helpers use browser Web Crypto with P-256 ECDH, HKDF-SHA-256, and
+AES-GCM. They are for encrypting to a recipient key, not for proving who sent
+the payload. Pair them with signed/verifiable documents when identity matters.
+
+Apps can use Swarm Kit's keypair helpers or provide their own Web Crypto
+`CryptoKey`s/JWKs.
+
+```ts
+const recipient = await kit.crypto.generateKeyPair()
+const publicKey = await kit.crypto.exportPublicKey(recipient.publicKey)
+
+const encrypted = await kit.crypto.publishJsonFor({
+  message: 'only the recipient can decrypt this',
+}, publicKey)
+
+const value = await kit.crypto.readJsonFrom(
+  encrypted.reference,
+  recipient.privateKey,
+)
+
+console.log(value)
+```
+
 ## DID-Style Documents
 
 DID-style documents store each document body as a chunk graph and each document
@@ -301,6 +326,7 @@ console.log(current?.value, latest?.value)
 - chunk graph text/JSON/bytes helpers
 - SOC text/JSON/bytes helpers
 - AES-GCM encrypted object helpers
+- P-256 ECDH public-key encrypted object helpers
 - revisioned DID-style document helper
 - single-writer hash-chain helper
 - multi-writer feed helper
@@ -312,7 +338,8 @@ console.log(current?.value, latest?.value)
 
 Not included yet:
 
-- recipient public-key encryption and key exchange
+- wallet-bound recipient key discovery and exchange
+- signed/verifiable document envelopes
 - CRDT conflict resolution on top of multi-writer entries
 - mailbox/inbox discovery conventions
 - Bee-compatible ACT abstractions
