@@ -95,6 +95,7 @@ console.log(value)
 | DID-style documents | `kit.did.create` | Revisioned document history with object-graph document bodies. |
 | Encryption | `kit.crypto.*` | Symmetric AES-GCM and P-256 ECDH public-key encrypted envelopes. |
 | Signed documents | `kit.signedDocuments.*` | Canonical signed JSON envelopes with P-256 and Ethereum wallet support. |
+| Commit-reveal | `kit.commitReveal.create` | Deterministic SOC commits and later reveals for sealed values. |
 | Provider compliance | `runSwarmProviderCompliance` | Browser-runnable contract checks for real provider behavior. |
 
 ## Driver And Provider Adapter
@@ -408,6 +409,53 @@ Signed documents are portable attestations. They can be stored as object graphs,
 referenced from owner records, mirrored by third parties, or sent through another
 protocol while remaining independently verifiable.
 
+## Commit-Reveal
+
+Commit-reveal protocols let a writer publish a commitment to a hidden JSON value
+now, then reveal the value and salt later. Swarm Kit stores the commit and reveal
+as deterministic SOCs under the writer's owner address, while revealed values are
+stored as object graphs.
+
+This is most useful in multiplayer or multi-party protocols where everyone uses
+the same namespace/topic/round, but each participant writes under their own SOC
+owner. The app can later read each participant's pair and verify that every
+reveal matches the value they committed before seeing the others.
+
+```ts
+const poll = kit.commitReveal.create<{ vote: string }>({
+  namespace: 'example.polls',
+  topic: 'proposal-7',
+  round: 'vote',
+})
+
+const commit = await poll.commit({ vote: 'yes' })
+
+// Keep this salt secret until the reveal phase.
+await poll.reveal({ vote: 'yes' }, commit.salt)
+
+const pair = await poll.readPair(commit.owner)
+
+console.log(pair.verified)
+```
+
+For a group, collect known participant owners and read each owner's pair:
+
+```ts
+const results = await Promise.all(
+  participantOwners.map(owner => poll.readPair(owner)),
+)
+
+const validReveals = results.filter(result => result.verified)
+```
+
+Commitments are domain-separated, canonical JSON hashes over namespace, topic,
+round, owner, value, and salt. Binding the owner prevents someone from copying
+another writer's hidden commitment as their own. Swarm Kit does not enforce
+deadlines, quorum, penalties, or phase transitions; those rules belong to the
+application protocol. Example app-level uses include sealed-bid auctions,
+simultaneous game moves, sealed voting, prediction contests, and shared
+randomness beacons.
+
 ## DID-Style Documents
 
 DID-style documents store each document body as a chunk graph and each document
@@ -565,6 +613,7 @@ primitives against the real injected provider. It includes panels for:
 - hash chains
 - multi-writer feeds
 - keyed lookup streams
+- commit-reveal
 
 ```sh
 npm run dev:playground

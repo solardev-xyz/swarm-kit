@@ -1,4 +1,5 @@
 import { base64ToBytes, bytesToBase64, bytesToHex, bytesToJson, hexToBytes, jsonToBytes, normalizeBytes } from './bytes.js';
+import { canonicalJson } from './canonical.js';
 import { deriveIdentifier } from './identifiers.js';
 import {
   publishObjectJson,
@@ -341,27 +342,6 @@ function validateSignedDocumentEnvelope(envelope: SignedDocumentEnvelope): void 
     throw new Error('Invalid signed document envelope');
   }
   base64ToBytes(envelope.signature.value);
-}
-
-function canonicalJson(value: unknown): string {
-  const normalized = JSON.stringify(value);
-  if (normalized === undefined) {
-    throw new Error('Signed document payload must be JSON serializable');
-  }
-  return stringifyCanonical(JSON.parse(normalized));
-}
-
-function stringifyCanonical(value: unknown): string {
-  if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(item => stringifyCanonical(item)).join(',')}]`;
-  }
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record).sort().map(key =>
-    `${JSON.stringify(key)}:${stringifyCanonical(record[key])}`
-  ).join(',')}}`;
 }
 
 function normalizeSignatureBytes(signature: SignatureBytes): Uint8Array {

@@ -343,7 +343,7 @@ var init_sha3 = __esm({
 });
 
 // node_modules/viem/_esm/utils/data/isHex.js
-function isHex(value, { strict = true } = {}) {
+function isHex2(value, { strict = true } = {}) {
   if (!value)
     return false;
   if (typeof value !== "string")
@@ -357,7 +357,7 @@ var init_isHex = __esm({
 
 // node_modules/viem/_esm/utils/data/size.js
 function size(value) {
-  if (isHex(value, { strict: false }))
+  if (isHex2(value, { strict: false }))
     return Math.ceil((value.length - 2) / 2);
   return value.length;
 }
@@ -657,7 +657,7 @@ function toBytes2(value, opts = {}) {
     return numberToBytes(value, opts);
   if (typeof value === "boolean")
     return boolToBytes(value, opts);
-  if (isHex(value))
+  if (isHex2(value))
     return hexToBytes2(value, opts);
   return stringToBytes(value, opts);
 }
@@ -735,7 +735,7 @@ var init_toBytes = __esm({
 // node_modules/viem/_esm/utils/hash/keccak256.js
 function keccak256(value, to_) {
   const to = to_ || "hex";
-  const bytes = keccak_256(isHex(value, { strict: false }) ? toBytes2(value) : value);
+  const bytes = keccak_256(isHex2(value, { strict: false }) ? toBytes2(value) : value);
   if (to === "bytes")
     return bytes;
   return toHex(bytes);
@@ -2718,16 +2718,16 @@ function weierstrass(curveDef) {
       throw new Error("options.strict was renamed to lowS");
     if (format !== void 0 && format !== "compact" && format !== "der")
       throw new Error("format must be compact or der");
-    const isHex2 = typeof sg === "string" || isBytes2(sg);
-    const isObj = !isHex2 && !format && typeof sg === "object" && sg !== null && typeof sg.r === "bigint" && typeof sg.s === "bigint";
-    if (!isHex2 && !isObj)
+    const isHex3 = typeof sg === "string" || isBytes2(sg);
+    const isObj = !isHex3 && !format && typeof sg === "object" && sg !== null && typeof sg.r === "bigint" && typeof sg.s === "bigint";
+    if (!isHex3 && !isObj)
       throw new Error("invalid signature, expected Uint8Array, hex string or Signature instance");
     let _sig = void 0;
     let P;
     try {
       if (isObj)
         _sig = new Signature(sg.r, sg.s);
-      if (isHex2) {
+      if (isHex3) {
         try {
           if (format !== "compact")
             _sig = Signature.fromDER(sg);
@@ -3477,6 +3477,27 @@ function assertHex(value, bytes, label = "hex") {
   return normalized.toLowerCase();
 }
 
+// src/canonical.ts
+function canonicalJson(value, label = "value") {
+  const normalized = JSON.stringify(value);
+  if (normalized === void 0) {
+    throw new Error(`${label} must be JSON serializable`);
+  }
+  return stringifyCanonical(JSON.parse(normalized));
+}
+function stringifyCanonical(value) {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stringifyCanonical(item)).join(",")}]`;
+  }
+  const record = value;
+  return `{${Object.keys(record).sort().map(
+    (key) => `${JSON.stringify(key)}:${stringifyCanonical(record[key])}`
+  ).join(",")}}`;
+}
+
 // src/provider.ts
 function getWindowSwarm() {
   const swarm = detectWindowSwarm();
@@ -3634,6 +3655,37 @@ async function readJson(provider, reference) {
   return bytesToJson((await readBytes(provider, reference)).bytes);
 }
 
+// src/errors.ts
+var SwarmKitError = class extends Error {
+  code;
+  reason;
+  cause;
+  constructor(message, options = {}) {
+    super(message);
+    this.name = "SwarmKitError";
+    this.code = options.code;
+    this.reason = options.reason;
+    this.cause = options.cause;
+  }
+};
+function getSwarmErrorReason(error) {
+  return error?.data?.reason ?? error?.reason;
+}
+function isSwarmReason(error, reason) {
+  return getSwarmErrorReason(error) === reason;
+}
+function normalizeError(error) {
+  if (error instanceof SwarmKitError) return error;
+  const providerError = error;
+  return new SwarmKitError(providerError?.message || String(error), buildErrorOptions(providerError, error));
+}
+function buildErrorOptions(providerError, cause) {
+  const options = { cause };
+  if (providerError.code !== void 0) options.code = providerError.code;
+  if (providerError.data?.reason !== void 0) options.reason = providerError.data.reason;
+  return options;
+}
+
 // src/identifiers.ts
 init_sha3();
 function keccakHex(bytes) {
@@ -3684,35 +3736,131 @@ function uint64be(value) {
   return bytes;
 }
 
-// src/errors.ts
-var SwarmKitError = class extends Error {
-  code;
-  reason;
-  cause;
-  constructor(message, options = {}) {
-    super(message);
-    this.name = "SwarmKitError";
-    this.code = options.code;
-    this.reason = options.reason;
-    this.cause = options.cause;
+// src/objects.ts
+var DEFAULT_CHUNK_SIZE = 4096;
+var MAX_CHILDREN_PER_NODE = 32;
+var DEFAULT_MAX_DEPTH = 16;
+async function publishObjectBytes(provider, data, options = {}) {
+  const bytes = normalizeBytes(data);
+  const chunkSize = options.chunkSize ?? DEFAULT_CHUNK_SIZE;
+  if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0 || chunkSize > DEFAULT_CHUNK_SIZE) {
+    throw new Error(`Object chunk size must be an integer between 1 and ${DEFAULT_CHUNK_SIZE}`);
   }
-};
-function getSwarmErrorReason(error) {
-  return error?.data?.reason ?? error?.reason;
+  const leaves = [];
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunkBytes = bytes.slice(offset, offset + chunkSize);
+    const published = await publishBytes(provider, chunkBytes);
+    leaves.push({
+      type: "chunk",
+      reference: published.reference,
+      size: chunkBytes.length
+    });
+  }
+  const root = await publishNode(provider, leaves, bytes.length);
+  return {
+    reference: root.reference,
+    size: bytes.length,
+    chunkCount: leaves.length,
+    nodeCount: root.nodeCount
+  };
 }
-function isSwarmReason(error, reason) {
-  return getSwarmErrorReason(error) === reason;
+async function readObjectBytes(provider, reference, options = {}) {
+  const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
+  if (!Number.isSafeInteger(maxDepth) || maxDepth < 0) {
+    throw new Error("Object read maxDepth must be a non-negative safe integer");
+  }
+  const result = await readNode(provider, reference, 0, maxDepth);
+  return result.bytes;
 }
-function normalizeError(error) {
-  if (error instanceof SwarmKitError) return error;
-  const providerError = error;
-  return new SwarmKitError(providerError?.message || String(error), buildErrorOptions(providerError, error));
+function publishObjectText(provider, text, options = {}) {
+  return publishObjectBytes(provider, utf8ToBytes(text), options);
 }
-function buildErrorOptions(providerError, cause) {
-  const options = { cause };
-  if (providerError.code !== void 0) options.code = providerError.code;
-  if (providerError.data?.reason !== void 0) options.reason = providerError.data.reason;
-  return options;
+async function readObjectText(provider, reference, options = {}) {
+  return bytesToUtf8(await readObjectBytes(provider, reference, options));
+}
+function publishObjectJson(provider, value, options = {}) {
+  return publishObjectBytes(provider, jsonToBytes(value), options);
+}
+async function readObjectJson(provider, reference, options = {}) {
+  return bytesToJson(await readObjectBytes(provider, reference, options));
+}
+async function publishNode(provider, children, size2) {
+  if (children.length <= MAX_CHILDREN_PER_NODE) {
+    const manifest = createNode(children, size2);
+    const published = await publishBytes(provider, jsonToBytes(manifest));
+    return { reference: published.reference, nodeCount: 1 };
+  }
+  const nodeChildren = [];
+  let nodeCount = 0;
+  for (let offset = 0; offset < children.length; offset += MAX_CHILDREN_PER_NODE) {
+    const group = children.slice(offset, offset + MAX_CHILDREN_PER_NODE);
+    const groupSize = sumChildren(group);
+    const published = await publishNode(provider, group, groupSize);
+    nodeChildren.push({
+      type: "node",
+      reference: published.reference,
+      size: groupSize
+    });
+    nodeCount += published.nodeCount;
+  }
+  const root = await publishNode(provider, nodeChildren, size2);
+  return {
+    reference: root.reference,
+    nodeCount: nodeCount + root.nodeCount
+  };
+}
+async function readNode(provider, reference, depth, maxDepth) {
+  if (depth > maxDepth) {
+    throw new Error("Object graph exceeds maxDepth");
+  }
+  const node = parseNode(await readBytes(provider, reference).then((result) => result.bytes));
+  const parts = await Promise.all(node.children.map(async (child) => {
+    if (child.type === "chunk") {
+      const chunk = await readBytes(provider, child.reference);
+      if (chunk.bytes.length !== child.size) {
+        throw new Error(`Object chunk size mismatch for ${child.reference}`);
+      }
+      return chunk.bytes;
+    }
+    const childNode = await readNode(provider, child.reference, depth + 1, maxDepth);
+    if (childNode.size !== child.size) {
+      throw new Error(`Object node size mismatch for ${child.reference}`);
+    }
+    return childNode.bytes;
+  }));
+  const bytes = concatBytes(parts);
+  if (bytes.length !== node.size) {
+    throw new Error(`Object graph size mismatch for ${reference}`);
+  }
+  return { bytes, size: node.size };
+}
+function createNode(children, size2) {
+  return {
+    version: 1,
+    type: "swarm-kit:chunk-graph",
+    size: size2,
+    children
+  };
+}
+function parseNode(bytes) {
+  const value = bytesToJson(bytes);
+  if (value.version !== 1 || value.type !== "swarm-kit:chunk-graph" || typeof value.size !== "number" || !Number.isSafeInteger(value.size) || value.size < 0 || !Array.isArray(value.children)) {
+    throw new Error("Invalid object graph node");
+  }
+  for (const child of value.children) {
+    if (!isChild(child)) {
+      throw new Error("Invalid object graph child");
+    }
+  }
+  return value;
+}
+function isChild(value) {
+  if (!value || typeof value !== "object") return false;
+  const child = value;
+  return (child.type === "chunk" || child.type === "node") && typeof child.reference === "string" && typeof child.size === "number" && Number.isSafeInteger(child.size) && child.size >= 0;
+}
+function sumChildren(children) {
+  return children.reduce((sum, child) => sum + child.size, 0);
 }
 
 // src/soc.ts
@@ -3764,6 +3912,247 @@ function decodeSocRead2(result) {
   };
   if (result.signature !== void 0) decoded.signature = result.signature;
   return decoded;
+}
+
+// src/commit-reveal.ts
+var DEFAULT_COMMIT_REVEAL_NAMESPACE = "swarm-kit:commit-reveal:v1";
+var COMMIT_ENVELOPE_TYPE = "swarm-kit:commit-reveal-commit";
+var REVEAL_ENVELOPE_TYPE = "swarm-kit:commit-reveal-reveal";
+var COMMITMENT_ALGORITHM = "keccak256-length-tagged-canonical-json-owner-salt-v1";
+var DEFAULT_SALT_BYTES = 32;
+var MIN_SALT_BYTES = 16;
+var MAX_SALT_BYTES = 64;
+function createCommitReveal(provider, options) {
+  const normalized = normalizeCommitRevealOptions(options);
+  function commitIdentifier() {
+    return commitRevealCommitIdentifier(normalized);
+  }
+  function revealIdentifier() {
+    return commitRevealRevealIdentifier(normalized);
+  }
+  async function getOwner() {
+    return (await getSigningIdentity(provider)).owner;
+  }
+  function commitmentFor(owner, value, salt) {
+    return commitRevealCommitment({ ...normalized, owner, value, salt });
+  }
+  async function readCommit(owner) {
+    try {
+      const soc = await readSocBytesByOwnerAndIdentifier(provider, owner, commitIdentifier());
+      const envelope = parseCommitEnvelope(bytesToJson(soc.bytes), normalized);
+      return commitFromSoc(envelope, soc);
+    } catch (error) {
+      if (isSwarmReason(error, "chunk_not_found")) return null;
+      throw error;
+    }
+  }
+  async function readReveal(owner) {
+    let soc;
+    try {
+      soc = await readSocBytesByOwnerAndIdentifier(provider, owner, revealIdentifier());
+    } catch (error) {
+      if (isSwarmReason(error, "chunk_not_found")) return null;
+      throw error;
+    }
+    const envelope = parseRevealEnvelope(bytesToJson(soc.bytes), normalized);
+    const value = await readObjectJson(provider, envelope.valueReference);
+    return revealFromSoc(envelope, soc, value);
+  }
+  function verify(commit, reveal) {
+    if (commit.type !== COMMIT_ENVELOPE_TYPE || reveal.type !== REVEAL_ENVELOPE_TYPE) return false;
+    if (!sameCommitRevealCoordinates(commit, normalized)) return false;
+    if (!sameCommitRevealCoordinates(reveal, normalized)) return false;
+    if (commit.algorithm !== COMMITMENT_ALGORITHM || reveal.algorithm !== COMMITMENT_ALGORITHM) return false;
+    if (commit.identifier.toLowerCase() !== commitIdentifier().toLowerCase()) return false;
+    if (reveal.identifier.toLowerCase() !== revealIdentifier().toLowerCase()) return false;
+    if (commit.owner.toLowerCase() !== reveal.owner.toLowerCase()) return false;
+    if (commit.commitment !== reveal.commitment) return false;
+    return commitmentFor(reveal.owner, reveal.value, reveal.salt) === commit.commitment;
+  }
+  return {
+    namespace: normalized.namespace,
+    topic: normalized.topic,
+    round: normalized.round,
+    commitIdentifier,
+    revealIdentifier,
+    getOwner,
+    generateSalt: generateCommitRevealSalt,
+    commitmentFor,
+    async commit(value, commitOptions = {}) {
+      const owner = await getOwner();
+      const salt = normalizeCommitRevealSalt(commitOptions.salt ?? generateCommitRevealSalt());
+      const envelope = {
+        version: 1,
+        type: COMMIT_ENVELOPE_TYPE,
+        namespace: normalized.namespace,
+        topic: normalized.topic,
+        round: normalized.round,
+        algorithm: COMMITMENT_ALGORITHM,
+        commitment: commitmentFor(owner, value, salt),
+        committedAt: normalizeTimestamp(commitOptions.at, "commit timestamp")
+      };
+      const commitWrite = await writeSocJson(provider, commitIdentifier(), envelope);
+      const stored = await readCommit(owner);
+      if (stored && sameCommitEnvelope(stored, envelope)) {
+        return { ...stored, salt, commitWrite };
+      }
+      throw new SwarmKitError("Commit SOC write collision", { reason: "soc_write_collision" });
+    },
+    async reveal(value, saltInput, revealOptions = {}) {
+      const owner = await getOwner();
+      const salt = normalizeCommitRevealSalt(saltInput);
+      const commitment = commitmentFor(owner, value, salt);
+      const commit = await readCommit(owner);
+      if (!commit) {
+        throw new SwarmKitError("Cannot reveal before writing a commit", { reason: "commit_not_found" });
+      }
+      if (commit.commitment !== commitment) {
+        throw new SwarmKitError("Reveal does not match commit", { reason: "commitment_mismatch" });
+      }
+      const publishedValue = await publishObjectJson(provider, value);
+      const envelope = {
+        version: 1,
+        type: REVEAL_ENVELOPE_TYPE,
+        namespace: normalized.namespace,
+        topic: normalized.topic,
+        round: normalized.round,
+        algorithm: COMMITMENT_ALGORITHM,
+        commitment,
+        salt,
+        valueReference: publishedValue.reference,
+        valueSize: publishedValue.size,
+        revealedAt: normalizeTimestamp(revealOptions.at, "reveal timestamp")
+      };
+      const revealWrite = await writeSocJson(provider, revealIdentifier(), envelope);
+      const stored = await readReveal(owner);
+      if (stored && sameRevealEnvelope(stored, envelope)) {
+        return { ...stored, revealWrite };
+      }
+      throw new SwarmKitError("Reveal SOC write collision", { reason: "soc_write_collision" });
+    },
+    readCommit,
+    readReveal,
+    async readPair(owner) {
+      const [commit, reveal] = await Promise.all([readCommit(owner), readReveal(owner)]);
+      return {
+        commit,
+        reveal,
+        verified: commit && reveal ? verify(commit, reveal) : null
+      };
+    },
+    verify
+  };
+}
+function commitRevealCommitIdentifier(options) {
+  const normalized = normalizeCommitRevealOptions(options);
+  return deriveIdentifier([normalized.namespace, normalized.topic, normalized.round, "commit"]);
+}
+function commitRevealRevealIdentifier(options) {
+  const normalized = normalizeCommitRevealOptions(options);
+  return deriveIdentifier([normalized.namespace, normalized.topic, normalized.round, "reveal"]);
+}
+function commitRevealCommitment(input) {
+  const normalized = normalizeCommitRevealOptions(input);
+  return deriveIdentifier([
+    "swarm-kit:commit-reveal:commitment:v1",
+    normalized.namespace,
+    normalized.topic,
+    normalized.round,
+    normalizeOwner(input.owner),
+    canonicalJson(input.value, "commit-reveal value"),
+    normalizeCommitRevealSalt(input.salt)
+  ]);
+}
+function generateCommitRevealSalt(bytes = DEFAULT_SALT_BYTES) {
+  if (!Number.isSafeInteger(bytes) || bytes < MIN_SALT_BYTES || bytes > MAX_SALT_BYTES) {
+    throw new Error(`Commit-reveal salt byte length must be between ${MIN_SALT_BYTES} and ${MAX_SALT_BYTES}`);
+  }
+  const salt = new Uint8Array(bytes);
+  getCrypto().getRandomValues(salt);
+  return bytesToHex(salt);
+}
+function commitFromSoc(envelope, soc) {
+  return {
+    ...envelope,
+    owner: soc.owner,
+    identifier: soc.identifier,
+    reference: soc.reference
+  };
+}
+function revealFromSoc(envelope, soc, value) {
+  return {
+    ...envelope,
+    owner: soc.owner,
+    identifier: soc.identifier,
+    reference: soc.reference,
+    value
+  };
+}
+function parseCommitEnvelope(value, options) {
+  if (value.version !== 1 || value.type !== COMMIT_ENVELOPE_TYPE || value.namespace !== options.namespace || value.topic !== options.topic || value.round !== options.round || value.algorithm !== COMMITMENT_ALGORITHM || !isHex(value.commitment, 32) || typeof value.committedAt !== "string" || Number.isNaN(Date.parse(value.committedAt))) {
+    throw new Error("Invalid commit-reveal commit envelope");
+  }
+  return value;
+}
+function parseRevealEnvelope(value, options) {
+  if (value.version !== 1 || value.type !== REVEAL_ENVELOPE_TYPE || value.namespace !== options.namespace || value.topic !== options.topic || value.round !== options.round || value.algorithm !== COMMITMENT_ALGORITHM || !isHex(value.commitment, 32) || !isValidSaltHex(value.salt) || typeof value.valueReference !== "string" || !value.valueReference.trim() || !Number.isSafeInteger(value.valueSize) || value.valueSize < 0 || typeof value.revealedAt !== "string" || Number.isNaN(Date.parse(value.revealedAt))) {
+    throw new Error("Invalid commit-reveal reveal envelope");
+  }
+  return value;
+}
+function sameCommitRevealCoordinates(value, options) {
+  return value.namespace === options.namespace && value.topic === options.topic && value.round === options.round;
+}
+function sameCommitEnvelope(a, b) {
+  return a.version === b.version && a.type === b.type && a.namespace === b.namespace && a.topic === b.topic && a.round === b.round && a.algorithm === b.algorithm && a.commitment === b.commitment && a.committedAt === b.committedAt;
+}
+function sameRevealEnvelope(a, b) {
+  return a.version === b.version && a.type === b.type && a.namespace === b.namespace && a.topic === b.topic && a.round === b.round && a.algorithm === b.algorithm && a.commitment === b.commitment && a.salt === b.salt && a.valueReference === b.valueReference && a.valueSize === b.valueSize && a.revealedAt === b.revealedAt;
+}
+function normalizeCommitRevealOptions(options) {
+  return {
+    namespace: normalizeNonEmpty(options.namespace ?? DEFAULT_COMMIT_REVEAL_NAMESPACE, "commit-reveal namespace"),
+    topic: normalizeNonEmpty(options.topic, "commit-reveal topic"),
+    round: normalizeNonEmpty(options.round, "commit-reveal round")
+  };
+}
+function normalizeCommitRevealSalt(salt) {
+  const hex = typeof salt === "string" ? salt.replace(/^0x/, "") : bytesToHex(normalizeBytes(salt));
+  if (!isValidSaltHex(hex)) {
+    throw new Error(`Commit-reveal salt must be a hex string between ${MIN_SALT_BYTES} and ${MAX_SALT_BYTES} bytes`);
+  }
+  return hex.toLowerCase();
+}
+function normalizeTimestamp(value, label) {
+  const date = value === void 0 ? /* @__PURE__ */ new Date() : value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`Commit-reveal ${label} must be a valid date`);
+  }
+  return date.toISOString();
+}
+function normalizeOwner(owner) {
+  const normalized = owner.trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(normalized)) {
+    throw new Error("Commit-reveal owner must be a 0x-prefixed Ethereum address");
+  }
+  return `0x${normalized.slice(2).toLowerCase()}`;
+}
+function normalizeNonEmpty(value, label) {
+  const normalized = String(value).trim();
+  if (!normalized) throw new Error(`${label} must not be empty`);
+  return normalized;
+}
+function isHex(value, bytes) {
+  return value.length === bytes * 2 && /^[0-9a-fA-F]+$/.test(value);
+}
+function isValidSaltHex(value) {
+  return value.length % 2 === 0 && value.length >= MIN_SALT_BYTES * 2 && value.length <= MAX_SALT_BYTES * 2 && /^[0-9a-fA-F]+$/.test(value);
+}
+function getCrypto() {
+  if (!globalThis.crypto) {
+    throw new Error("Web Crypto is not available in this environment");
+  }
+  return globalThis.crypto;
 }
 
 // src/indexed-soc.ts
@@ -3913,133 +4302,6 @@ function getRecordIndex(record) {
 }
 function defaultSameEnvelope(stored, expected) {
   return JSON.stringify(stored) === JSON.stringify(expected);
-}
-
-// src/objects.ts
-var DEFAULT_CHUNK_SIZE = 4096;
-var MAX_CHILDREN_PER_NODE = 32;
-var DEFAULT_MAX_DEPTH = 16;
-async function publishObjectBytes(provider, data, options = {}) {
-  const bytes = normalizeBytes(data);
-  const chunkSize = options.chunkSize ?? DEFAULT_CHUNK_SIZE;
-  if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0 || chunkSize > DEFAULT_CHUNK_SIZE) {
-    throw new Error(`Object chunk size must be an integer between 1 and ${DEFAULT_CHUNK_SIZE}`);
-  }
-  const leaves = [];
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    const chunkBytes = bytes.slice(offset, offset + chunkSize);
-    const published = await publishBytes(provider, chunkBytes);
-    leaves.push({
-      type: "chunk",
-      reference: published.reference,
-      size: chunkBytes.length
-    });
-  }
-  const root = await publishNode(provider, leaves, bytes.length);
-  return {
-    reference: root.reference,
-    size: bytes.length,
-    chunkCount: leaves.length,
-    nodeCount: root.nodeCount
-  };
-}
-async function readObjectBytes(provider, reference, options = {}) {
-  const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
-  if (!Number.isSafeInteger(maxDepth) || maxDepth < 0) {
-    throw new Error("Object read maxDepth must be a non-negative safe integer");
-  }
-  const result = await readNode(provider, reference, 0, maxDepth);
-  return result.bytes;
-}
-function publishObjectText(provider, text, options = {}) {
-  return publishObjectBytes(provider, utf8ToBytes(text), options);
-}
-async function readObjectText(provider, reference, options = {}) {
-  return bytesToUtf8(await readObjectBytes(provider, reference, options));
-}
-function publishObjectJson(provider, value, options = {}) {
-  return publishObjectBytes(provider, jsonToBytes(value), options);
-}
-async function readObjectJson(provider, reference, options = {}) {
-  return bytesToJson(await readObjectBytes(provider, reference, options));
-}
-async function publishNode(provider, children, size2) {
-  if (children.length <= MAX_CHILDREN_PER_NODE) {
-    const manifest = createNode(children, size2);
-    const published = await publishBytes(provider, jsonToBytes(manifest));
-    return { reference: published.reference, nodeCount: 1 };
-  }
-  const nodeChildren = [];
-  let nodeCount = 0;
-  for (let offset = 0; offset < children.length; offset += MAX_CHILDREN_PER_NODE) {
-    const group = children.slice(offset, offset + MAX_CHILDREN_PER_NODE);
-    const groupSize = sumChildren(group);
-    const published = await publishNode(provider, group, groupSize);
-    nodeChildren.push({
-      type: "node",
-      reference: published.reference,
-      size: groupSize
-    });
-    nodeCount += published.nodeCount;
-  }
-  const root = await publishNode(provider, nodeChildren, size2);
-  return {
-    reference: root.reference,
-    nodeCount: nodeCount + root.nodeCount
-  };
-}
-async function readNode(provider, reference, depth, maxDepth) {
-  if (depth > maxDepth) {
-    throw new Error("Object graph exceeds maxDepth");
-  }
-  const node = parseNode(await readBytes(provider, reference).then((result) => result.bytes));
-  const parts = await Promise.all(node.children.map(async (child) => {
-    if (child.type === "chunk") {
-      const chunk = await readBytes(provider, child.reference);
-      if (chunk.bytes.length !== child.size) {
-        throw new Error(`Object chunk size mismatch for ${child.reference}`);
-      }
-      return chunk.bytes;
-    }
-    const childNode = await readNode(provider, child.reference, depth + 1, maxDepth);
-    if (childNode.size !== child.size) {
-      throw new Error(`Object node size mismatch for ${child.reference}`);
-    }
-    return childNode.bytes;
-  }));
-  const bytes = concatBytes(parts);
-  if (bytes.length !== node.size) {
-    throw new Error(`Object graph size mismatch for ${reference}`);
-  }
-  return { bytes, size: node.size };
-}
-function createNode(children, size2) {
-  return {
-    version: 1,
-    type: "swarm-kit:chunk-graph",
-    size: size2,
-    children
-  };
-}
-function parseNode(bytes) {
-  const value = bytesToJson(bytes);
-  if (value.version !== 1 || value.type !== "swarm-kit:chunk-graph" || typeof value.size !== "number" || !Number.isSafeInteger(value.size) || value.size < 0 || !Array.isArray(value.children)) {
-    throw new Error("Invalid object graph node");
-  }
-  for (const child of value.children) {
-    if (!isChild(child)) {
-      throw new Error("Invalid object graph child");
-    }
-  }
-  return value;
-}
-function isChild(value) {
-  if (!value || typeof value !== "object") return false;
-  const child = value;
-  return (child.type === "chunk" || child.type === "node") && typeof child.reference === "string" && typeof child.size === "number" && Number.isSafeInteger(child.size) && child.size >= 0;
-}
-function sumChildren(children) {
-  return children.reduce((sum, child) => sum + child.size, 0);
 }
 
 // src/did.ts
@@ -4461,7 +4723,7 @@ function isP256PublicJwk(key) {
 }
 function randomBytes2(size2) {
   const bytes = new Uint8Array(size2);
-  getCrypto().getRandomValues(bytes);
+  getCrypto2().getRandomValues(bytes);
   return bytes;
 }
 function toArrayBuffer(bytes) {
@@ -4469,14 +4731,14 @@ function toArrayBuffer(bytes) {
   copy.set(bytes);
   return copy.buffer;
 }
-function getCrypto() {
+function getCrypto2() {
   if (!globalThis.crypto) {
     throw new Error("Web Crypto is not available in this environment");
   }
   return globalThis.crypto;
 }
 function getSubtle() {
-  const subtle = getCrypto().subtle;
+  const subtle = getCrypto2().subtle;
   if (!subtle) {
     throw new Error("Web Crypto subtle API is not available in this environment");
   }
@@ -5060,7 +5322,7 @@ init_size();
 init_fromHex();
 init_toHex();
 async function recoverPublicKey({ hash, signature }) {
-  const hashHex = isHex(hash) ? hash : toHex(hash);
+  const hashHex = isHex2(hash) ? hash : toHex(hash);
   const { secp256k1: secp256k12 } = await Promise.resolve().then(() => (init_secp256k1(), secp256k1_exports));
   const signature_ = (() => {
     if (typeof signature === "object" && "r" in signature && "s" in signature) {
@@ -5069,7 +5331,7 @@ async function recoverPublicKey({ hash, signature }) {
       const recoveryBit2 = toRecoveryBit(yParityOrV2);
       return new secp256k12.Signature(hexToBigInt(r), hexToBigInt(s)).addRecoveryBit(recoveryBit2);
     }
-    const signatureHex = isHex(signature) ? signature : toHex(signature);
+    const signatureHex = isHex2(signature) ? signature : toHex(signature);
     if (size(signatureHex) !== 65)
       throw new Error("invalid signature length");
     const yParityOrV = hexToNumber(`0x${signatureHex.slice(130)}`);
@@ -5318,25 +5580,6 @@ function validateSignedDocumentEnvelope(envelope) {
   }
   base64ToBytes(envelope.signature.value);
 }
-function canonicalJson(value) {
-  const normalized = JSON.stringify(value);
-  if (normalized === void 0) {
-    throw new Error("Signed document payload must be JSON serializable");
-  }
-  return stringifyCanonical(JSON.parse(normalized));
-}
-function stringifyCanonical(value) {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stringifyCanonical(item)).join(",")}]`;
-  }
-  const record = value;
-  return `{${Object.keys(record).sort().map(
-    (key) => `${JSON.stringify(key)}:${stringifyCanonical(record[key])}`
-  ).join(",")}}`;
-}
 function normalizeSignatureBytes(signature) {
   return normalizeBytes(signature);
 }
@@ -5379,14 +5622,14 @@ function toArrayBuffer2(bytes) {
   copy.set(bytes);
   return copy.buffer;
 }
-function getCrypto2() {
+function getCrypto3() {
   if (!globalThis.crypto) {
     throw new Error("Web Crypto is not available in this environment");
   }
   return globalThis.crypto;
 }
 function getSubtle2() {
-  const subtle = getCrypto2().subtle;
+  const subtle = getCrypto3().subtle;
   if (!subtle) {
     throw new Error("Web Crypto subtle API is not available in this environment");
   }
@@ -5483,6 +5726,11 @@ function createSwarmKit(input = getWindowSwarm()) {
   const records = {
     create: (options) => createOwnerRecords(provider, options)
   };
+  const commitReveal = {
+    create: (options) => createCommitReveal(provider, options),
+    generateSalt: generateCommitRevealSalt,
+    commitmentFor: commitRevealCommitment
+  };
   const signedDocuments = {
     sign: signDocument,
     verify: verifySignedDocument,
@@ -5523,6 +5771,7 @@ function createSwarmKit(input = getWindowSwarm()) {
     crypto: crypto2,
     lookup,
     records,
+    commitReveal,
     signedDocuments,
     publishBytes: chunks.publishBytes,
     readBytes: chunks.readBytes,
@@ -5872,7 +6121,12 @@ export {
   bytesToJson,
   bytesToUtf8,
   callSwarm,
+  canonicalJson,
+  commitRevealCommitIdentifier,
+  commitRevealCommitment,
+  commitRevealRevealIdentifier,
   concatBytes,
+  createCommitReveal,
   createDidDocument,
   createEip1193PersonalSigner,
   createEip191PersonalVerifier,
@@ -5910,6 +6164,7 @@ export {
   exportPrivateEncryptionKey,
   exportPublicEncryptionKey,
   findLatestContiguousIndex,
+  generateCommitRevealSalt,
   generateEncryptionKey,
   generateEncryptionKeyPair,
   generateP256SigningKeyPair,

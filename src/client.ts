@@ -1,4 +1,5 @@
 import { publishBytes, publishJson, publishText, readBytes, readJson, readText } from './chunks.js';
+import { commitRevealCommitment, createCommitReveal, generateCommitRevealSalt } from './commit-reveal.js';
 import { createDidDocument, didDocumentIdentifier, didDocumentRevisionIdentifier, readDidDocument, writeDidDocument } from './did.js';
 import {
   decryptBytes,
@@ -166,6 +167,11 @@ export function createSwarmKit(input: SwarmKitDriverInput = getWindowSwarm()) {
   const records = {
     create: <T = unknown>(options: Parameters<typeof createOwnerRecords<T>>[1]) => createOwnerRecords<T>(provider, options),
   };
+  const commitReveal = {
+    create: <T = unknown>(options: Parameters<typeof createCommitReveal<T>>[1]) => createCommitReveal<T>(provider, options),
+    generateSalt: generateCommitRevealSalt,
+    commitmentFor: commitRevealCommitment,
+  };
   const signedDocuments = {
     sign: signDocument,
     verify: verifySignedDocument,
@@ -207,6 +213,7 @@ export function createSwarmKit(input: SwarmKitDriverInput = getWindowSwarm()) {
     crypto,
     lookup,
     records,
+    commitReveal,
     signedDocuments,
     publishBytes: chunks.publishBytes,
     readBytes: chunks.readBytes,

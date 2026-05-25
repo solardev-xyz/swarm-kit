@@ -157,6 +157,7 @@
     <button class="tab" data-panel="hash">Hash Chain</button>
     <button class="tab" data-panel="multi">Multi-Writer</button>
     <button class="tab" data-panel="lookup">Lookup</button>
+    <button class="tab" data-panel="commit-reveal">Commit-Reveal</button>
   </nav>
 
   <section id="panel-epoch" class="panel active">
@@ -406,6 +407,49 @@
     </div>
   </section>
 
+  <section id="panel-commit-reveal" class="panel">
+    <div class="grid">
+      <div>
+        <div class="field-row">
+          <div>
+            <label for="commit-reveal-namespace">Namespace</label>
+            <input id="commit-reveal-namespace" value="swarm-kit-playground-commit-reveal">
+          </div>
+          <div>
+            <label for="commit-reveal-topic">Topic</label>
+            <input id="commit-reveal-topic" value="sealed-poll">
+          </div>
+        </div>
+        <div class="field-row">
+          <div>
+            <label for="commit-reveal-round">Round</label>
+            <input id="commit-reveal-round" value="round-1">
+          </div>
+          <div>
+            <label for="commit-reveal-owner">Owner To Read</label>
+            <input id="commit-reveal-owner" placeholder="0x...">
+          </div>
+        </div>
+        <label for="commit-reveal-payload">Value</label>
+        <textarea id="commit-reveal-payload">{"vote":"yes"}</textarea>
+        <label for="commit-reveal-salt">Salt</label>
+        <input id="commit-reveal-salt" placeholder="64 hex characters">
+        <div class="actions">
+          <button class="requires-provider secondary" id="commit-reveal-use-owner" disabled>Use Signing Owner</button>
+          <button class="requires-provider secondary" id="commit-reveal-generate-salt" disabled>Generate Salt</button>
+        </div>
+        <div class="actions">
+          <button class="requires-provider" id="commit-reveal-commit" disabled>Commit</button>
+          <button class="requires-provider secondary" id="commit-reveal-reveal" disabled>Reveal</button>
+          <button class="requires-provider secondary" id="commit-reveal-read-commit" disabled>Read Commit</button>
+          <button class="requires-provider secondary" id="commit-reveal-read-reveal" disabled>Read Reveal</button>
+          <button class="requires-provider secondary" id="commit-reveal-read-pair" disabled>Read Pair</button>
+        </div>
+      </div>
+      <pre id="commit-reveal-output" class="result">-</pre>
+    </div>
+  </section>
+
   <script type="module">
     import { createSwarmKit, waitForSwarm } from './swarm-kit.js';
 
@@ -422,6 +466,7 @@
       hash: $('hash-output'),
       multi: $('multi-output'),
       lookup: $('lookup-output'),
+      commitReveal: $('commit-reveal-output'),
     };
 
     let kit;
@@ -502,6 +547,14 @@
       });
     }
 
+    function commitRevealProtocol() {
+      return kit.commitReveal.create({
+        namespace: $('commit-reveal-namespace').value.trim() || 'swarm-kit-playground-commit-reveal',
+        topic: $('commit-reveal-topic').value.trim() || 'sealed-poll',
+        round: $('commit-reveal-round').value.trim() || 'round-1',
+      });
+    }
+
     function ownerRecords() {
       return kit.records.create({
         namespace: $('record-namespace').value.trim() || 'swarm-kit-playground-records',
@@ -519,6 +572,18 @@
       const current = $('record-owner').value.trim();
       if (current) return current;
       return useSigningOwnerForRecords();
+    }
+
+    async function useSigningOwnerForCommitReveal() {
+      const currentOwner = await ensureOwner();
+      $('commit-reveal-owner').value = currentOwner;
+      return currentOwner;
+    }
+
+    async function ensureCommitRevealOwner() {
+      const current = $('commit-reveal-owner').value.trim();
+      if (current) return current;
+      return useSigningOwnerForCommitReveal();
     }
 
     function setRecordExample(kind) {
@@ -1039,6 +1104,76 @@
           ));
         } catch (error) {
           showError(outputs.lookup, error);
+        }
+      };
+
+      $('commit-reveal-use-owner').onclick = async () => {
+        try {
+          show(outputs.commitReveal, { owner: await useSigningOwnerForCommitReveal() });
+        } catch (error) {
+          showError(outputs.commitReveal, error);
+        }
+      };
+
+      $('commit-reveal-generate-salt').onclick = async () => {
+        try {
+          const salt = kit.commitReveal.generateSalt();
+          $('commit-reveal-salt').value = salt;
+          show(outputs.commitReveal, { salt });
+        } catch (error) {
+          showError(outputs.commitReveal, error);
+        }
+      };
+
+      $('commit-reveal-commit').onclick = async () => {
+        try {
+          const protocol = commitRevealProtocol();
+          const payload = parseJson('commit-reveal-payload');
+          const salt = $('commit-reveal-salt').value.trim() || protocol.generateSalt();
+          $('commit-reveal-salt').value = salt;
+          const result = await protocol.commit(payload, { salt });
+          owner = result.owner;
+          $('commit-reveal-owner').value = result.owner;
+          show(outputs.commitReveal, result);
+        } catch (error) {
+          showError(outputs.commitReveal, error);
+        }
+      };
+
+      $('commit-reveal-reveal').onclick = async () => {
+        try {
+          const salt = $('commit-reveal-salt').value.trim();
+          if (!salt) throw new Error('No salt');
+          const result = await commitRevealProtocol().reveal(parseJson('commit-reveal-payload'), salt);
+          owner = result.owner;
+          $('commit-reveal-owner').value = result.owner;
+          show(outputs.commitReveal, result);
+        } catch (error) {
+          showError(outputs.commitReveal, error);
+        }
+      };
+
+      $('commit-reveal-read-commit').onclick = async () => {
+        try {
+          show(outputs.commitReveal, await commitRevealProtocol().readCommit(await ensureCommitRevealOwner()));
+        } catch (error) {
+          showError(outputs.commitReveal, error);
+        }
+      };
+
+      $('commit-reveal-read-reveal').onclick = async () => {
+        try {
+          show(outputs.commitReveal, await commitRevealProtocol().readReveal(await ensureCommitRevealOwner()));
+        } catch (error) {
+          showError(outputs.commitReveal, error);
+        }
+      };
+
+      $('commit-reveal-read-pair').onclick = async () => {
+        try {
+          show(outputs.commitReveal, await commitRevealProtocol().readPair(await ensureCommitRevealOwner()));
+        } catch (error) {
+          showError(outputs.commitReveal, error);
         }
       };
     }
