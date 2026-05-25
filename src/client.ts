@@ -42,6 +42,7 @@ import { createHashChain } from './hash-chain.js';
 import { createKeyedLookup } from './lookup.js';
 import { createMultiWriterFeed } from './multi-writer-feed.js';
 import { publishObjectBytes, publishObjectJson, publishObjectText, readObjectBytes, readObjectJson, readObjectText } from './objects.js';
+import { createOwnerRecords } from './records.js';
 import {
   getSigningIdentity,
   readSocBytesByAddress,
@@ -160,6 +161,9 @@ export function createSwarmKit(provider: SwarmProvider = getWindowSwarm()) {
   const lookup = {
     create: <T = unknown>(options: Parameters<typeof createKeyedLookup<T>>[1]) => createKeyedLookup<T>(provider, options),
   };
+  const records = {
+    create: <T = unknown>(options: Parameters<typeof createOwnerRecords<T>>[1]) => createOwnerRecords<T>(provider, options),
+  };
   const signedDocuments = {
     sign: signDocument,
     verify: verifySignedDocument,
@@ -193,6 +197,7 @@ export function createSwarmKit(provider: SwarmProvider = getWindowSwarm()) {
     multiWriterFeed,
     crypto,
     lookup,
+    records,
     signedDocuments,
     publishBytes: chunks.publishBytes,
     readBytes: chunks.readBytes,

@@ -3701,7 +3701,7 @@ function createIndexedSocStream(provider, options) {
   const entryTag = options.entryTag ?? DEFAULT_ENTRY_TAG;
   const label = options.label ?? DEFAULT_LABEL;
   const maxAppendAttempts = options.maxAppendAttempts ?? DEFAULT_MAX_APPEND_ATTEMPTS;
-  const sameEnvelope5 = options.sameEnvelope ?? defaultSameEnvelope;
+  const sameEnvelope6 = options.sameEnvelope ?? defaultSameEnvelope;
   function entryIdentifier(index) {
     assertIndexedSocIndex(index, `${label} index`);
     return deriveIdentifier([options.namespace, ...parts, entryTag, index]);
@@ -3757,7 +3757,7 @@ function createIndexedSocStream(provider, options) {
         const identifier = entryIdentifier(index);
         const entryWrite = await writeSocJson(provider, identifier, envelope);
         const stored = await readRecord(owner, index);
-        if (stored && sameEnvelope5(stored.envelope, envelope)) {
+        if (stored && sameEnvelope6(stored.envelope, envelope)) {
           return {
             ...toStreamEntry(stored),
             entryWrite
@@ -4832,6 +4832,146 @@ function compareEntriesNewestFirst(a, b) {
   return a.writerId.localeCompare(b.writerId);
 }
 
+// src/records.ts
+var DEFAULT_RECORDS_LABEL = "owner records";
+function createOwnerRecords(provider, options) {
+  const namespace = normalizeNamespace2(options.namespace);
+  function streamFor(key) {
+    const normalizedKey = normalizeKey2(key);
+    return createIndexedSocStream(provider, {
+      namespace,
+      parts: [normalizedKey],
+      entryTag: "revision",
+      label: DEFAULT_RECORDS_LABEL,
+      parseEnvelope: (value, context) => {
+        const envelope = parseRecordEnvelope(value, namespace, normalizedKey);
+        if (envelope.index !== context.index) {
+          throw new Error(`Owner record revision mismatch for ${context.reference}`);
+        }
+        return envelope;
+      },
+      sameEnvelope: sameEnvelope5
+    });
+  }
+  async function assertExpectedOwner(stream, expectedOwner) {
+    if (expectedOwner === void 0) return;
+    const actualOwner = await stream.getOwner();
+    if (!sameOwner(actualOwner, expectedOwner)) {
+      throw new SwarmKitError(`Provider is signing as ${actualOwner}, expected ${expectedOwner}`, {
+        reason: "owner_mismatch"
+      });
+    }
+  }
+  async function hydrateRecord(record, expectedOwner) {
+    if (!sameOwner(record.soc.owner, expectedOwner)) {
+      throw new SwarmKitError(`Owner record resolved to ${record.soc.owner}, expected ${expectedOwner}`, {
+        reason: "owner_mismatch"
+      });
+    }
+    return hydrateStreamEntry({
+      owner: record.soc.owner,
+      identifier: record.soc.identifier,
+      reference: record.soc.reference,
+      envelope: record.envelope
+    });
+  }
+  async function hydrateStreamEntry(entry) {
+    const value = await readObjectJson(provider, entry.envelope.valueReference);
+    return {
+      ...toPublicEnvelope(entry.envelope),
+      owner: entry.owner,
+      identifier: entry.identifier,
+      reference: entry.reference,
+      value
+    };
+  }
+  return {
+    namespace,
+    revisionIdentifier: (key, revision) => streamFor(key).entryIdentifier(revision),
+    getOwner: streamFor("__owner__").getOwner,
+    async write(key, value, writeOptions = {}) {
+      const normalizedKey = normalizeKey2(key);
+      const stream = streamFor(normalizedKey);
+      await assertExpectedOwner(stream, writeOptions.expectedOwner);
+      const published = await publishObjectJson(provider, value);
+      const writtenAt = new Date(writeOptions.at ?? Date.now()).toISOString();
+      const appended = await stream.append(({ index, previousReference }) => ({
+        version: 1,
+        type: "swarm-kit:owner-record",
+        namespace,
+        key: normalizedKey,
+        index,
+        previousReference,
+        valueReference: published.reference,
+        valueSize: published.size,
+        writtenAt
+      }));
+      return {
+        ...toPublicEnvelope(appended.envelope),
+        owner: appended.owner,
+        identifier: appended.identifier,
+        reference: appended.reference,
+        value,
+        entryWrite: appended.entryWrite
+      };
+    },
+    async readAt(owner, key, revision) {
+      const record = await streamFor(key).readRecord(owner, revision);
+      return record ? hydrateRecord(record, owner) : null;
+    },
+    async readLatest(owner, key) {
+      const record = await streamFor(key).readLatestRecord(owner);
+      return record ? hydrateRecord(record, owner) : null;
+    },
+    async readHistory(owner, key, readOptions = {}) {
+      const limit = readOptions.limit ?? 10;
+      assertIndexedSocLimit(limit, "owner record history limit");
+      const entries = await streamFor(key).readLatest(owner, { limit });
+      return Promise.all(entries.map((entry) => {
+        if (!sameOwner(entry.owner, owner)) {
+          throw new SwarmKitError(`Owner record resolved to ${entry.owner}, expected ${owner}`, {
+            reason: "owner_mismatch"
+          });
+        }
+        return hydrateStreamEntry(entry);
+      }));
+    }
+  };
+}
+function parseRecordEnvelope(value, namespace, key) {
+  if (value.version !== 1 || value.type !== "swarm-kit:owner-record" || value.namespace !== namespace || value.key !== key || !Number.isSafeInteger(value.index) || value.index < 0 || !(typeof value.previousReference === "string" || value.previousReference === null) || typeof value.valueReference !== "string" || typeof value.valueSize !== "number" || !Number.isSafeInteger(value.valueSize) || value.valueSize < 0 || typeof value.writtenAt !== "string") {
+    throw new Error("Invalid owner record");
+  }
+  return value;
+}
+function sameEnvelope5(a, b) {
+  return a.version === b.version && a.type === b.type && a.namespace === b.namespace && a.key === b.key && a.index === b.index && a.previousReference === b.previousReference && a.valueReference === b.valueReference && a.valueSize === b.valueSize && a.writtenAt === b.writtenAt;
+}
+function toPublicEnvelope(envelope) {
+  return {
+    version: envelope.version,
+    type: envelope.type,
+    namespace: envelope.namespace,
+    key: envelope.key,
+    revision: envelope.index,
+    previousReference: envelope.previousReference,
+    valueReference: envelope.valueReference,
+    valueSize: envelope.valueSize,
+    writtenAt: envelope.writtenAt
+  };
+}
+function normalizeNamespace2(namespace) {
+  if (!namespace.trim()) throw new Error("Owner records namespace must not be empty");
+  return namespace;
+}
+function normalizeKey2(key) {
+  if (!key.trim()) throw new Error("Owner record key must not be empty");
+  return key;
+}
+function sameOwner(a, b) {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
 // node_modules/viem/_esm/accounts/utils/publicKeyToAddress.js
 init_getAddress();
 init_keccak256();
@@ -5265,6 +5405,9 @@ function createSwarmKit(provider = getWindowSwarm()) {
   const lookup = {
     create: (options) => createKeyedLookup(provider, options)
   };
+  const records = {
+    create: (options) => createOwnerRecords(provider, options)
+  };
   const signedDocuments = {
     sign: signDocument,
     verify: verifySignedDocument,
@@ -5297,6 +5440,7 @@ function createSwarmKit(provider = getWindowSwarm()) {
     multiWriterFeed,
     crypto: crypto2,
     lookup,
+    records,
     signedDocuments,
     publishBytes: chunks.publishBytes,
     readBytes: chunks.readBytes,
@@ -5656,6 +5800,7 @@ export {
   createIndexedSocStream,
   createKeyedLookup,
   createMultiWriterFeed,
+  createOwnerRecords,
   createP256DocumentSigner,
   createP256DocumentVerifier,
   createSwarmKit,

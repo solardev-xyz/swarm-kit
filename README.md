@@ -3,15 +3,21 @@
 High-level data structures over the Freedom Browser `window.swarm` provider.
 
 This package is intentionally built on the provider API, not direct Bee access.
-It never handles private keys and never talks to a node directly. The browser
-provider remains responsible for permissions, signing, postage, and resource
-limits.
+It never talks to a node directly and does not manage provider signing keys. The
+browser provider remains responsible for permissions, SOC signing, postage, and
+resource limits. App-level crypto helpers operate on caller-managed Web Crypto
+keys.
 
 This is an early prototype. The repository is public, but the package is still
 marked `"private": true` and is not published to npm yet.
 
 `swarm-kit` targets Freedom Browser's `window.swarm` provider. It is not a Bee
 HTTP client and should not be expected to run against a plain Bee node directly.
+
+The core idea is simple: Freedom Browser exposes low-level CAC and SOC chunk
+transport, and Swarm Kit turns those primitives into reusable browser-friendly
+data structures. App-specific protocols such as mailboxes, profiles, service
+records, or social feeds should sit on top of these generic building blocks.
 
 ## Development Setup
 
@@ -70,7 +76,80 @@ const value = await kit.chunks.readJson(chunk.reference)
 console.log(value)
 ```
 
-## SOC Objects
+## Primitive Map
+
+| Layer | Client API | What It Provides |
+| --- | --- | --- |
+| Provider adapter | `waitForSwarm`, `callSwarm`, `createSwarmKit` | Normalizes direct and request-style `window.swarm` providers. |
+| Byte/codecs | `utf8ToBytes`, `bytesToBase64`, `jsonToBytes`, `hexToBytes` | Browser-safe encoding helpers without Node `Buffer`. |
+| Identifiers | `deriveIdentifier`, `keccakHex` | Deterministic Keccak-based SOC identifiers from length-prefixed parts. |
+| CAC chunks | `kit.chunks.*` | Raw content-addressed bytes/text/JSON, one chunk payload. |
+| SOC chunks | `kit.soc.*` | Raw single-owner bytes/text/JSON at caller-chosen identifiers. |
+| Object graphs | `kit.objects.*` | Larger content-addressed bytes/text/JSON split across CAC chunks. |
+| Indexed SOC streams | `createIndexedSocStream` | Generic write-once append stream over deterministic SOC indexes. |
+| Owner records | `kit.records.create` | Generic revisioned records under an owner, namespace, and key. |
+| Keyed lookup streams | `kit.lookup.create` | Revisioned values per application-defined key. |
+| Epoch feeds | `kit.epochFeed.create` | Time-bucketed SOC entries for O(1) reads at time epochs. |
+| Hash chains | `kit.hashChain.create` | Single-writer append logs with previous-entry references. |
+| Multi-writer feeds | `kit.multiWriterFeed.create` | Per-writer append streams with reader-side fan-out and merge. |
+| DID-style documents | `kit.did.create` | Revisioned document history with object-graph document bodies. |
+| Encryption | `kit.crypto.*` | Symmetric AES-GCM and P-256 ECDH public-key encrypted envelopes. |
+| Signed documents | `kit.signedDocuments.*` | Canonical signed JSON envelopes with P-256 and Ethereum wallet support. |
+| Provider compliance | `runSwarmProviderCompliance` | Browser-runnable contract checks for real provider behavior. |
+
+## Provider Adapter
+
+Swarm Kit only requires a provider-compatible object. In Freedom Browser this is
+usually `window.swarm`, but the adapter also supports request-style providers so
+the library can tolerate API shape changes.
+
+```ts
+import { callSwarm, waitForSwarm } from '@freedom/swarm-kit'
+
+const provider = await waitForSwarm({ requireFreedomBrowser: true })
+await callSwarm(provider, 'swarm_requestAccess')
+
+const capabilities = await callSwarm(provider, 'swarm_getCapabilities')
+console.log(capabilities.limits.maxChunkPayloadBytes)
+```
+
+`createSwarmKit(provider)` binds the same provider to all helper namespaces so
+applications do not have to pass it repeatedly.
+
+## Identifier Helpers
+
+SOC identifiers are deterministic 32-byte hex strings. `deriveIdentifier`
+hashes length-prefixed parts, so different part boundaries cannot collide by
+ambiguous concatenation.
+
+```ts
+import { deriveIdentifier } from '@freedom/swarm-kit'
+
+const profileIdentifier = deriveIdentifier([
+  'com.example.app',
+  'profile',
+  'v1',
+])
+```
+
+Use namespaces that are specific to the application/protocol you are building.
+Swarm Kit's higher-level helpers use the same pattern internally.
+
+## CAC Chunks
+
+CAC helpers publish and read raw content-addressed chunks. They are ideal for
+small immutable values. For larger values, use object graphs instead.
+
+```ts
+const published = await kit.chunks.publishJson({
+  hello: 'swarm',
+})
+
+const value = await kit.chunks.readJson(published.reference)
+console.log(published.reference, value)
+```
+
+## Raw SOC Helpers
 
 ```ts
 import { createSwarmKit, deriveIdentifier } from '@freedom/swarm-kit'
@@ -93,6 +172,14 @@ Treat raw SOC identifiers as write-once. Re-writing the same `(owner,
 identifier)` pair is undefined at the Bee/network layer, so append-only
 structures in this package use deterministic index identifiers instead of
 mutable SOC pointers.
+
+SOC terminology:
+
+- `owner`: the address/signing identity that owns the SOC.
+- `identifier`: the caller-chosen 32-byte key under that owner.
+- `reference` or `address`: the resulting SOC chunk address.
+- `(owner, identifier)`: the coordinate readers can use to find a deterministic
+  SOC without knowing its final address.
 
 ## Indexed SOC Streams
 
@@ -130,6 +217,40 @@ const written = await stream.append(({ index, previousReference }) => ({
 const latest = await stream.readLatest(written.owner)
 ```
 
+## Owner Records
+
+Owner records are revisioned JSON records under a namespace and key. They are
+generic on purpose: an app decides whether a key means "profile", "mailbox",
+"service", or something else. Swarm Kit handles deterministic identifiers,
+append-only revisions, larger value storage, missing reads, and optional owner
+checks.
+
+```ts
+const records = kit.records.create({
+  namespace: 'com.example.app',
+})
+
+const written = await records.write('profile', {
+  displayName: 'Alice',
+  encryptionPublicKey: publicKey,
+}, {
+  expectedOwner: walletAddress,
+})
+
+const latest = await records.readLatest(walletAddress, 'profile')
+const history = await records.readHistory(walletAddress, 'profile')
+
+console.log(written.revision, latest?.value, history.length)
+```
+
+`expectedOwner` is useful when the user must choose a specific signing identity
+in Freedom Browser. The write fails before publishing the SOC if the provider is
+currently signing as a different owner.
+
+This is the right primitive when an app wants "given this owner address, look up
+the latest value for this well-known key" without baking that key's app-level
+schema into Swarm Kit.
+
 ## Chunk Graph Objects
 
 Raw CAC chunks are limited to one chunk payload. Object helpers split larger
@@ -145,6 +266,27 @@ const value = await kit.objects.readJson(big.reference)
 
 console.log(big.chunkCount, value)
 ```
+
+## Choosing Between Records And Lookup Streams
+
+`records` and `lookup` are intentionally similar, but they answer slightly
+different questions.
+
+Use `records` when the owner address is the root of discovery:
+
+```ts
+const profile = await records.readLatest(ownerAddress, 'profile')
+```
+
+Use `lookup` when the key is the root of an app-specific index under a writer:
+
+```ts
+const status = await lookup.readLatest(writerOwner, 'alice')
+```
+
+Both are built on indexed SOC streams and object graphs. Neither decides what a
+profile, mailbox, status, or service record means; that belongs to the
+application protocol.
 
 ## Encryption Helpers
 
@@ -174,6 +316,9 @@ const derived = await kit.crypto.deriveKeyFromPassword(password)
 const key = derived.key
 ```
 
+Symmetric encryption is a transport/storage primitive. Swarm Kit does not manage
+where keys are stored, how they are backed up, or who should receive them.
+
 ## Public-Key Encryption Envelopes
 
 Public-key helpers use browser Web Crypto with P-256 ECDH, HKDF-SHA-256, and
@@ -198,6 +343,10 @@ const value = await kit.crypto.readJsonFrom(
 
 console.log(value)
 ```
+
+This is the primitive for encrypting data to a recipient-controlled public key.
+Discovering that public key is intentionally left to app protocols built on
+records, signed documents, or another convention.
 
 ## Signed Documents
 
@@ -246,6 +395,10 @@ const ok = await kit.signedDocuments.verify(
   }),
 )
 ```
+
+Signed documents are portable attestations. They can be stored as object graphs,
+referenced from owner records, mirrored by third parties, or sent through another
+protocol while remaining independently verifiable.
 
 ## DID-Style Documents
 
@@ -319,6 +472,10 @@ const merged = await feed.readLatest([
 console.log(merged.map(entry => entry.payload))
 ```
 
+Multi-writer feeds do not solve conflict resolution by themselves. They provide
+the transport shape for collecting each writer's signed append stream; CRDT or
+application-specific merge rules belong above this layer.
+
 ## Keyed Lookup Streams
 
 Keyed lookup streams are revisioned records per application-defined key: latest
@@ -365,25 +522,63 @@ const latest = await feed.readLatest(owner, { lookback: 24 })
 console.log(current?.value, latest?.value)
 ```
 
-## Current Scope
+## Provider Compliance
 
-- provider adapter and `window.swarm` type surface
-- base64, UTF-8, JSON, bytes, and hex helpers
-- CAC text/JSON/bytes helpers
-- indexed SOC stream helper
-- chunk graph text/JSON/bytes helpers
-- SOC text/JSON/bytes helpers
-- AES-GCM encrypted object helpers
-- P-256 ECDH public-key encrypted object helpers
-- signed/verifiable document envelopes
-- revisioned DID-style document helper
-- single-writer hash-chain helper
-- multi-writer feed helper
-- keyed lookup stream helper
-- deterministic identifier derivation using Keccak-256
-- epoch-feed helper
-- browser-runnable provider compliance checks
-- in-memory mock provider tests
+The provider compliance harness is a browser-runnable test page for real
+`window.swarm` implementations. It checks the provider behavior that Swarm Kit's
+higher-level structures rely on:
+
+- provider access and capabilities
+- signing identity shape
+- CAC publish/read roundtrip
+- SOC write/read by address
+- SOC read by `(owner, identifier)`
+- missing CAC/SOC reads normalized to `chunk_not_found`
+- CAC/SOC type mismatch errors
+- unsupported option errors
+
+```sh
+npm run dev:provider-compliance
+```
+
+Then open `http://127.0.0.1:4175/` in Freedom Browser and run the checks.
+
+## Playground
+
+The playground in `examples/epoch-feed-smoke` exercises the high-level
+primitives against the real injected provider. It includes panels for:
+
+- epoch feeds
+- object graphs
+- encryption
+- signed documents and Ethereum wallet signatures
+- owner records
+- DID-style documents
+- hash chains
+- multi-writer feeds
+- keyed lookup streams
+
+```sh
+npm run dev:playground
+```
+
+Then open `http://127.0.0.1:4173/` in Freedom Browser.
+
+## Responsibility Split
+
+Swarm Kit provides generic, deterministic, browser-friendly data structures over
+`window.swarm`. It deliberately does not define product protocols such as
+mailboxes, social profiles, delivery semantics, trust graphs, or CRDT merge
+rules.
+
+Applications should define:
+
+- record keys and payload schemas
+- key discovery and key rotation UX
+- whether wallet-owned SOCs, signed documents, or both are required
+- mailbox/inbox conventions
+- multi-writer conflict resolution
+- migration and compatibility rules
 
 Not included yet:
 

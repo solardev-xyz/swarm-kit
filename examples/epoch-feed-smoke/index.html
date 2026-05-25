@@ -152,6 +152,7 @@
     <button class="tab" data-panel="objects">Objects</button>
     <button class="tab" data-panel="crypto">Encryption</button>
     <button class="tab" data-panel="signed">Signed Docs</button>
+    <button class="tab" data-panel="records">Records</button>
     <button class="tab" data-panel="did">DID Document</button>
     <button class="tab" data-panel="hash">Hash Chain</button>
     <button class="tab" data-panel="multi">Multi-Writer</button>
@@ -256,6 +257,55 @@
         </div>
       </div>
       <pre id="signed-output" class="result">-</pre>
+    </div>
+  </section>
+
+  <section id="panel-records" class="panel">
+    <div class="grid">
+      <div>
+        <div class="field-row">
+          <div>
+            <label for="record-namespace">Namespace</label>
+            <input id="record-namespace" value="swarm-kit-playground-records">
+          </div>
+          <div>
+            <label for="record-key">Key</label>
+            <input id="record-key" value="profile">
+          </div>
+        </div>
+        <div class="field-row">
+          <div>
+            <label for="record-owner">Owner To Read</label>
+            <input id="record-owner" placeholder="0x...">
+          </div>
+          <div>
+            <label for="record-expected-owner">Expected Write Owner</label>
+            <input id="record-expected-owner" placeholder="optional 0x...">
+          </div>
+        </div>
+        <label for="record-payload">Value</label>
+        <textarea id="record-payload">{
+  "type": "profile",
+  "displayName": "Alice",
+  "encryptionPublicKey": "paste-public-key-here",
+  "services": []
+}</textarea>
+        <label for="record-revision">Revision</label>
+        <input id="record-revision" value="0" inputmode="numeric">
+        <div class="actions">
+          <button class="requires-provider secondary" id="record-use-owner" disabled>Use Signing Owner</button>
+          <button class="secondary" id="record-example-profile">Profile Example</button>
+          <button class="secondary" id="record-example-mailbox">Mailbox Example</button>
+          <button class="secondary" id="record-example-service">Service Example</button>
+        </div>
+        <div class="actions">
+          <button class="requires-provider" id="record-write" disabled>Write Revision</button>
+          <button class="requires-provider secondary" id="record-read" disabled>Read Latest</button>
+          <button class="requires-provider secondary" id="record-history" disabled>Read History</button>
+          <button class="requires-provider secondary" id="record-read-revision" disabled>Read Revision</button>
+        </div>
+      </div>
+      <pre id="record-output" class="result">-</pre>
     </div>
   </section>
 
@@ -367,6 +417,7 @@
       objects: $('object-output'),
       crypto: $('crypto-output'),
       signed: $('signed-output'),
+      records: $('record-output'),
       did: $('did-output'),
       hash: $('hash-output'),
       multi: $('multi-output'),
@@ -448,6 +499,55 @@
     function keyedLookup() {
       return kit.lookup.create({
         namespace: $('lookup-namespace').value.trim() || 'swarm-kit-playground-lookup',
+      });
+    }
+
+    function ownerRecords() {
+      return kit.records.create({
+        namespace: $('record-namespace').value.trim() || 'swarm-kit-playground-records',
+      });
+    }
+
+    async function useSigningOwnerForRecords() {
+      const currentOwner = await ensureOwner();
+      $('record-owner').value = currentOwner;
+      $('record-expected-owner').value = currentOwner;
+      return currentOwner;
+    }
+
+    async function ensureRecordOwner() {
+      const current = $('record-owner').value.trim();
+      if (current) return current;
+      return useSigningOwnerForRecords();
+    }
+
+    function setRecordExample(kind) {
+      if (kind === 'mailbox') {
+        $('record-key').value = 'mailbox';
+        $('record-payload').value = stringify({
+          type: 'mailbox',
+          encryptionPublicKey: 'paste-public-key-here',
+          delivery: [
+            { type: 'indexed-stream', namespace: 'com.example.mailbox.inbox' },
+          ],
+        });
+        return;
+      }
+      if (kind === 'service') {
+        $('record-key').value = 'service:status';
+        $('record-payload').value = stringify({
+          type: 'service',
+          service: 'status',
+          topic: 'swarm-kit-playground-status',
+        });
+        return;
+      }
+      $('record-key').value = 'profile';
+      $('record-payload').value = stringify({
+        type: 'profile',
+        displayName: 'Alice',
+        encryptionPublicKey: 'paste-public-key-here',
+        services: [],
       });
     }
 
@@ -714,6 +814,82 @@
           show(outputs.signed, { verified: ok, expected: false }, ok === false);
         } catch (error) {
           showError(outputs.signed, error);
+        }
+      };
+
+      $('record-use-owner').onclick = async () => {
+        try {
+          show(outputs.records, { owner: await useSigningOwnerForRecords() });
+        } catch (error) {
+          showError(outputs.records, error);
+        }
+      };
+
+      $('record-example-profile').onclick = () => {
+        setRecordExample('profile');
+        show(outputs.records, { example: 'profile', key: $('record-key').value });
+      };
+
+      $('record-example-mailbox').onclick = () => {
+        setRecordExample('mailbox');
+        show(outputs.records, { example: 'mailbox', key: $('record-key').value });
+      };
+
+      $('record-example-service').onclick = () => {
+        setRecordExample('service');
+        show(outputs.records, { example: 'service', key: $('record-key').value });
+      };
+
+      $('record-write').onclick = async () => {
+        try {
+          const expectedOwner = $('record-expected-owner').value.trim();
+          const result = await ownerRecords().write(
+            $('record-key').value.trim() || 'profile',
+            parseJson('record-payload'),
+            expectedOwner ? { expectedOwner } : {},
+          );
+          owner = result.owner;
+          $('record-owner').value = result.owner;
+          $('record-expected-owner').value = result.owner;
+          $('record-revision').value = String(result.revision);
+          show(outputs.records, result);
+        } catch (error) {
+          showError(outputs.records, error);
+        }
+      };
+
+      $('record-read').onclick = async () => {
+        try {
+          show(outputs.records, await ownerRecords().readLatest(
+            await ensureRecordOwner(),
+            $('record-key').value.trim() || 'profile',
+          ));
+        } catch (error) {
+          showError(outputs.records, error);
+        }
+      };
+
+      $('record-history').onclick = async () => {
+        try {
+          show(outputs.records, await ownerRecords().readHistory(
+            await ensureRecordOwner(),
+            $('record-key').value.trim() || 'profile',
+            { limit: 10 },
+          ));
+        } catch (error) {
+          showError(outputs.records, error);
+        }
+      };
+
+      $('record-read-revision').onclick = async () => {
+        try {
+          show(outputs.records, await ownerRecords().readAt(
+            await ensureRecordOwner(),
+            $('record-key').value.trim() || 'profile',
+            parseIndex('record-revision'),
+          ));
+        } catch (error) {
+          showError(outputs.records, error);
         }
       };
 
