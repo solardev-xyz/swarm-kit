@@ -1,6 +1,6 @@
 import { bytesToJson, bytesToUtf8, concatBytes, jsonToBytes, normalizeBytes, utf8ToBytes, type BytesLike } from './bytes.js';
 import { publishBytes as publishChunkBytes, readBytes as readChunkBytes } from './chunks.js';
-import type { SwarmProvider } from './provider.js';
+import type { SwarmKitDriverInput } from './driver.js';
 
 export interface ObjectPublishOptions {
   chunkSize?: number;
@@ -33,7 +33,7 @@ const MAX_CHILDREN_PER_NODE = 32;
 const DEFAULT_MAX_DEPTH = 16;
 
 export async function publishObjectBytes(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   data: BytesLike,
   options: ObjectPublishOptions = {},
 ): Promise<PublishObjectResult> {
@@ -64,7 +64,7 @@ export async function publishObjectBytes(
 }
 
 export async function readObjectBytes(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   reference: string,
   options: ObjectReadOptions = {},
 ): Promise<Uint8Array> {
@@ -78,7 +78,7 @@ export async function readObjectBytes(
 }
 
 export function publishObjectText(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   text: string,
   options: ObjectPublishOptions = {},
 ): Promise<PublishObjectResult> {
@@ -86,7 +86,7 @@ export function publishObjectText(
 }
 
 export async function readObjectText(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   reference: string,
   options: ObjectReadOptions = {},
 ): Promise<string> {
@@ -94,7 +94,7 @@ export async function readObjectText(
 }
 
 export function publishObjectJson(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   value: unknown,
   options: ObjectPublishOptions = {},
 ): Promise<PublishObjectResult> {
@@ -102,7 +102,7 @@ export function publishObjectJson(
 }
 
 export async function readObjectJson<T = unknown>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   reference: string,
   options: ObjectReadOptions = {},
 ): Promise<T> {
@@ -110,7 +110,7 @@ export async function readObjectJson<T = unknown>(
 }
 
 async function publishNode(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   children: ChunkGraphChild[],
   size: number,
 ): Promise<{ reference: string; nodeCount: number }> {
@@ -142,7 +142,7 @@ async function publishNode(
 }
 
 async function readNode(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   reference: string,
   depth: number,
   maxDepth: number,

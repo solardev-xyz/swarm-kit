@@ -2,7 +2,8 @@ import { bytesToJson } from './bytes.js';
 import { createIndexedSocStream, assertIndexedSocLimit, type IndexedSocRecord } from './indexed-soc.js';
 import { publishObjectJson, readObjectJson } from './objects.js';
 import { readSocBytesByAddress } from './soc.js';
-import type { SwarmProvider, SwarmWriteSingleOwnerChunkResult } from './provider.js';
+import type { SwarmKitDriverInput } from './driver.js';
+import type { SwarmWriteSingleOwnerChunkResult } from './provider.js';
 
 export interface HashChainOptions {
   topic: string;
@@ -52,7 +53,7 @@ export interface HashChain<T = unknown> {
 const DEFAULT_HASH_CHAIN_NAMESPACE = 'swarm-kit:hash-chain:v1';
 
 export function createHashChain<T = unknown>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   options: HashChainOptions,
 ): HashChain<T> {
   const namespace = options.namespace ?? DEFAULT_HASH_CHAIN_NAMESPACE;

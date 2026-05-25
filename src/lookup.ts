@@ -1,6 +1,7 @@
 import { createIndexedSocStream, assertIndexedSocLimit, type IndexedSocRecord, type IndexedSocStreamEntry } from './indexed-soc.js';
 import { publishObjectJson, readObjectJson } from './objects.js';
-import type { SwarmProvider, SwarmWriteSingleOwnerChunkResult } from './provider.js';
+import type { SwarmKitDriverInput } from './driver.js';
+import type { SwarmWriteSingleOwnerChunkResult } from './provider.js';
 
 export interface KeyedLookupOptions {
   namespace: string;
@@ -50,7 +51,7 @@ export interface KeyedLookup<T = unknown> {
 const DEFAULT_LOOKUP_LABEL = 'keyed lookup';
 
 export function createKeyedLookup<T = unknown>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   options: KeyedLookupOptions,
 ): KeyedLookup<T> {
   const namespace = normalizeNamespace(options.namespace);

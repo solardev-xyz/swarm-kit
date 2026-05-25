@@ -3537,17 +3537,87 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// src/driver.ts
+function createWindowSwarmDriver(provider) {
+  const driver = {
+    isSwarmKitDriver: true,
+    async publishChunk(params) {
+      return callSwarm(provider, "swarm_publishChunk", {
+        data: normalizeBytes(params.data),
+        ...params.span !== void 0 ? { span: params.span } : {}
+      });
+    },
+    async readChunk(params) {
+      const result = await callSwarm(provider, "swarm_readChunk", {
+        reference: params.reference
+      });
+      return decodeChunkRead(result);
+    },
+    async writeSingleOwnerChunk(params) {
+      return callSwarm(provider, "swarm_writeSingleOwnerChunk", {
+        identifier: params.identifier,
+        data: normalizeBytes(params.data),
+        ...params.span !== void 0 ? { span: params.span } : {}
+      });
+    },
+    async readSingleOwnerChunk(params) {
+      const result = await callSwarm(
+        provider,
+        "swarm_readSingleOwnerChunk",
+        "address" in params ? { address: params.address } : { owner: params.owner, identifier: params.identifier }
+      );
+      return decodeSocRead(result);
+    }
+  };
+  if (provider.getSigningIdentity || provider.request) {
+    driver.getSigningIdentity = () => callSwarm(provider, "swarm_getSigningIdentity");
+  }
+  if (provider.getCapabilities || provider.request) {
+    driver.getCapabilities = () => callSwarm(provider, "swarm_getCapabilities");
+  }
+  if (provider.requestAccess || provider.request) {
+    driver.requestAccess = () => callSwarm(provider, "swarm_requestAccess");
+  }
+  return driver;
+}
+function toSwarmKitDriver(input) {
+  return isSwarmKitDriver(input) ? input : createWindowSwarmDriver(input);
+}
+function isSwarmKitDriver(input) {
+  return input.isSwarmKitDriver === true;
+}
+function decodeChunkRead(result) {
+  return {
+    data: base64ToBytes(result.data),
+    span: result.span
+  };
+}
+function decodeSocRead(result) {
+  const decoded = {
+    data: base64ToBytes(result.data),
+    span: result.span,
+    reference: result.reference,
+    owner: result.owner,
+    identifier: result.identifier
+  };
+  if (result.signature !== void 0) decoded.signature = result.signature;
+  return decoded;
+}
+function normalizeDriverBytes(value) {
+  return normalizeBytes(value);
+}
+
 // src/chunks.ts
 async function publishBytes(provider, data, options = {}) {
-  return callSwarm(provider, "swarm_publishChunk", {
-    data: normalizeBytes(data),
-    span: options.span
+  return toSwarmKitDriver(provider).publishChunk({
+    data: normalizeDriverBytes(data),
+    ...options.span !== void 0 ? { span: options.span } : {}
   });
 }
 async function readBytes(provider, reference) {
-  const result = await callSwarm(provider, "swarm_readChunk", { reference });
+  const result = await toSwarmKitDriver(provider).readChunk({ reference });
   return {
-    bytes: base64ToBytes(result.data),
+    bytes: result.data,
     span: result.span
   };
 }
@@ -3647,20 +3717,24 @@ function buildErrorOptions(providerError, cause) {
 
 // src/soc.ts
 async function getSigningIdentity(provider) {
-  return callSwarm(provider, "swarm_getSigningIdentity");
+  const driver = toSwarmKitDriver(provider);
+  if (!driver.getSigningIdentity) {
+    throw new Error("Swarm driver does not support getSigningIdentity");
+  }
+  return driver.getSigningIdentity();
 }
 async function writeSocBytes(provider, identifier, data, options = {}) {
-  return callSwarm(provider, "swarm_writeSingleOwnerChunk", {
+  return toSwarmKitDriver(provider).writeSingleOwnerChunk({
     identifier,
-    data: normalizeBytes(data),
-    span: options.span
+    data: normalizeDriverBytes(data),
+    ...options.span !== void 0 ? { span: options.span } : {}
   });
 }
 async function readSocBytesByAddress(provider, address) {
-  return decodeSocRead(await callSwarm(provider, "swarm_readSingleOwnerChunk", { address }));
+  return decodeSocRead2(await toSwarmKitDriver(provider).readSingleOwnerChunk({ address }));
 }
 async function readSocBytesByOwnerAndIdentifier(provider, owner, identifier) {
-  return decodeSocRead(await callSwarm(provider, "swarm_readSingleOwnerChunk", { owner, identifier }));
+  return decodeSocRead2(await toSwarmKitDriver(provider).readSingleOwnerChunk({ owner, identifier }));
 }
 async function writeSocText(provider, identifier, text, options = {}) {
   return writeSocBytes(provider, identifier, utf8ToBytes(text), options);
@@ -3680,9 +3754,9 @@ async function readSocJsonByAddress(provider, address) {
 async function readSocJsonByOwnerAndIdentifier(provider, owner, identifier) {
   return bytesToJson((await readSocBytesByOwnerAndIdentifier(provider, owner, identifier)).bytes);
 }
-function decodeSocRead(result) {
+function decodeSocRead2(result) {
   const decoded = {
-    bytes: base64ToBytes(result.data),
+    bytes: result.data,
     span: result.span,
     reference: result.reference,
     owner: result.owner,
@@ -5320,7 +5394,8 @@ function getSubtle2() {
 }
 
 // src/client.ts
-function createSwarmKit(provider = getWindowSwarm()) {
+function createSwarmKit(input = getWindowSwarm()) {
+  const provider = toSwarmKitDriver(input);
   const chunks = {
     publishBytes: publishBytes.bind(null, provider),
     readBytes: readBytes.bind(null, provider),
@@ -5428,9 +5503,16 @@ function createSwarmKit(provider = getWindowSwarm()) {
     createEthereumPersonalVerifier
   };
   return {
-    provider,
-    requestAccess: () => callSwarm(provider, "swarm_requestAccess"),
-    getCapabilities: () => callSwarm(provider, "swarm_getCapabilities"),
+    provider: input,
+    driver: provider,
+    requestAccess: () => {
+      if (!provider.requestAccess) throw new Error("Swarm driver does not support requestAccess");
+      return provider.requestAccess();
+    },
+    getCapabilities: () => {
+      if (!provider.getCapabilities) throw new Error("Swarm driver does not support getCapabilities");
+      return provider.getCapabilities();
+    },
     chunks,
     soc,
     epochFeed,
@@ -5804,6 +5886,7 @@ export {
   createP256DocumentSigner,
   createP256DocumentVerifier,
   createSwarmKit,
+  createWindowSwarmDriver,
   decryptBytes,
   decryptBytesFrom,
   decryptJson,
@@ -5839,10 +5922,12 @@ export {
   importP256PublicSigningKey,
   importPrivateEncryptionKey,
   importPublicEncryptionKey,
+  isSwarmKitDriver,
   isSwarmReason,
   jsonToBytes,
   keccakHex,
   normalizeBytes,
+  normalizeDriverBytes,
   normalizeError,
   publishBytes,
   publishEncryptedBytes,
@@ -5883,6 +5968,7 @@ export {
   runSwarmProviderCompliance,
   signDocument,
   signedDocumentPayloadBytes,
+  toSwarmKitDriver,
   utf8ToBytes,
   verifySignedDocument,
   waitForSwarm,

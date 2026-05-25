@@ -1,11 +1,6 @@
-import { base64ToBytes, bytesToJson, bytesToUtf8, jsonToBytes, normalizeBytes, utf8ToBytes, type BytesLike } from './bytes.js';
-import {
-  callSwarm,
-  type SwarmProvider,
-  type SwarmReadSingleOwnerChunkResult,
-  type SwarmSigningIdentity,
-  type SwarmWriteSingleOwnerChunkResult,
-} from './provider.js';
+import { bytesToJson, bytesToUtf8, jsonToBytes, utf8ToBytes, type BytesLike } from './bytes.js';
+import { normalizeDriverBytes, toSwarmKitDriver, type SwarmKitDriverInput, type SwarmKitReadSingleOwnerChunkResult } from './driver.js';
+import type { SwarmSigningIdentity, SwarmWriteSingleOwnerChunkResult } from './provider.js';
 
 export interface ReadSocBytesResult {
   bytes: Uint8Array;
@@ -16,37 +11,41 @@ export interface ReadSocBytesResult {
   signature?: string;
 }
 
-export async function getSigningIdentity(provider: SwarmProvider): Promise<SwarmSigningIdentity> {
-  return callSwarm(provider, 'swarm_getSigningIdentity');
+export async function getSigningIdentity(provider: SwarmKitDriverInput): Promise<SwarmSigningIdentity> {
+  const driver = toSwarmKitDriver(provider);
+  if (!driver.getSigningIdentity) {
+    throw new Error('Swarm driver does not support getSigningIdentity');
+  }
+  return driver.getSigningIdentity();
 }
 
 export async function writeSocBytes(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   identifier: string,
   data: BytesLike,
   options: { span?: number | bigint } = {},
 ): Promise<SwarmWriteSingleOwnerChunkResult> {
-  return callSwarm(provider, 'swarm_writeSingleOwnerChunk', {
+  return toSwarmKitDriver(provider).writeSingleOwnerChunk({
     identifier,
-    data: normalizeBytes(data),
-    span: options.span,
+    data: normalizeDriverBytes(data),
+    ...(options.span !== undefined ? { span: options.span } : {}),
   });
 }
 
-export async function readSocBytesByAddress(provider: SwarmProvider, address: string): Promise<ReadSocBytesResult> {
-  return decodeSocRead(await callSwarm(provider, 'swarm_readSingleOwnerChunk', { address }));
+export async function readSocBytesByAddress(provider: SwarmKitDriverInput, address: string): Promise<ReadSocBytesResult> {
+  return decodeSocRead(await toSwarmKitDriver(provider).readSingleOwnerChunk({ address }));
 }
 
 export async function readSocBytesByOwnerAndIdentifier(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   owner: string,
   identifier: string,
 ): Promise<ReadSocBytesResult> {
-  return decodeSocRead(await callSwarm(provider, 'swarm_readSingleOwnerChunk', { owner, identifier }));
+  return decodeSocRead(await toSwarmKitDriver(provider).readSingleOwnerChunk({ owner, identifier }));
 }
 
 export async function writeSocText(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   identifier: string,
   text: string,
   options: { span?: number | bigint } = {},
@@ -54,12 +53,12 @@ export async function writeSocText(
   return writeSocBytes(provider, identifier, utf8ToBytes(text), options);
 }
 
-export async function readSocTextByAddress(provider: SwarmProvider, address: string): Promise<string> {
+export async function readSocTextByAddress(provider: SwarmKitDriverInput, address: string): Promise<string> {
   return bytesToUtf8((await readSocBytesByAddress(provider, address)).bytes);
 }
 
 export async function readSocTextByOwnerAndIdentifier(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   owner: string,
   identifier: string,
 ): Promise<string> {
@@ -67,7 +66,7 @@ export async function readSocTextByOwnerAndIdentifier(
 }
 
 export async function writeSocJson(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   identifier: string,
   value: unknown,
   options: { span?: number | bigint } = {},
@@ -75,21 +74,21 @@ export async function writeSocJson(
   return writeSocBytes(provider, identifier, jsonToBytes(value), options);
 }
 
-export async function readSocJsonByAddress<T = unknown>(provider: SwarmProvider, address: string): Promise<T> {
+export async function readSocJsonByAddress<T = unknown>(provider: SwarmKitDriverInput, address: string): Promise<T> {
   return bytesToJson<T>((await readSocBytesByAddress(provider, address)).bytes);
 }
 
 export async function readSocJsonByOwnerAndIdentifier<T = unknown>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   owner: string,
   identifier: string,
 ): Promise<T> {
   return bytesToJson<T>((await readSocBytesByOwnerAndIdentifier(provider, owner, identifier)).bytes);
 }
 
-function decodeSocRead(result: SwarmReadSingleOwnerChunkResult): ReadSocBytesResult {
+function decodeSocRead(result: SwarmKitReadSingleOwnerChunkResult): ReadSocBytesResult {
   const decoded: ReadSocBytesResult = {
-    bytes: base64ToBytes(result.data),
+    bytes: result.data,
     span: result.span,
     reference: result.reference,
     owner: result.owner,

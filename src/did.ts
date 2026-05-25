@@ -1,7 +1,8 @@
 import { deriveIdentifier } from './identifiers.js';
 import { assertIndexedSocIndex, createIndexedSocStream, type IndexedSocRecord, type IndexedSocStreamEntry } from './indexed-soc.js';
 import { publishObjectJson, readObjectJson } from './objects.js';
-import type { SwarmProvider, SwarmWriteSingleOwnerChunkResult } from './provider.js';
+import type { SwarmKitDriverInput } from './driver.js';
+import type { SwarmWriteSingleOwnerChunkResult } from './provider.js';
 
 export interface DidDocumentOptions {
   namespace?: string;
@@ -64,7 +65,7 @@ export function didDocumentRevisionIdentifier(index: number, options: DidDocumen
 }
 
 export function createDidDocument<T = unknown>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   options: DidDocumentOptions = {},
 ): RevisionedDidDocument<T> {
   const stream = createDidDocumentStream(provider, options);
@@ -136,7 +137,7 @@ export function createDidDocument<T = unknown>(
 }
 
 export async function writeDidDocument<T = unknown>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   document: T,
   options: DidDocumentOptions = {},
 ): Promise<WriteDidDocumentResult<T>> {
@@ -144,7 +145,7 @@ export async function writeDidDocument<T = unknown>(
 }
 
 export async function readDidDocument<T = unknown>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   owner: string,
   options: DidDocumentOptions = {},
 ): Promise<ReadDidDocumentResult<T>> {
@@ -156,7 +157,7 @@ export async function readDidDocument<T = unknown>(
 }
 
 function createDidDocumentStream(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   options: DidDocumentOptions,
 ) {
   return createIndexedSocStream<DidDocumentRevisionEnvelope>(provider, createDidDocumentStreamOptions(options));

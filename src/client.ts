@@ -55,7 +55,7 @@ import {
   writeSocJson,
   writeSocText,
 } from './soc.js';
-import { callSwarm, getWindowSwarm, type SwarmProvider } from './provider.js';
+import { getWindowSwarm } from './provider.js';
 import {
   assertSignedDocument,
   createEip1193PersonalSigner,
@@ -75,8 +75,10 @@ import {
   signedDocumentPayloadBytes,
   verifySignedDocument,
 } from './signed-documents.js';
+import { toSwarmKitDriver, type SwarmKitDriverInput } from './driver.js';
 
-export function createSwarmKit(provider: SwarmProvider = getWindowSwarm()) {
+export function createSwarmKit(input: SwarmKitDriverInput = getWindowSwarm()) {
+  const provider = toSwarmKitDriver(input);
   const chunks = {
     publishBytes: publishBytes.bind(null, provider),
     readBytes: readBytes.bind(null, provider),
@@ -185,9 +187,16 @@ export function createSwarmKit(provider: SwarmProvider = getWindowSwarm()) {
   };
 
   return {
-    provider,
-    requestAccess: () => callSwarm(provider, 'swarm_requestAccess'),
-    getCapabilities: () => callSwarm(provider, 'swarm_getCapabilities'),
+    provider: input,
+    driver: provider,
+    requestAccess: () => {
+      if (!provider.requestAccess) throw new Error('Swarm driver does not support requestAccess');
+      return provider.requestAccess();
+    },
+    getCapabilities: () => {
+      if (!provider.getCapabilities) throw new Error('Swarm driver does not support getCapabilities');
+      return provider.getCapabilities();
+    },
     chunks,
     soc,
     epochFeed,

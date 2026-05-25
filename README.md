@@ -80,7 +80,7 @@ console.log(value)
 
 | Layer | Client API | What It Provides |
 | --- | --- | --- |
-| Provider adapter | `waitForSwarm`, `callSwarm`, `createSwarmKit` | Normalizes direct and request-style `window.swarm` providers. |
+| Driver/provider adapter | `createSwarmKit`, `createWindowSwarmDriver`, `waitForSwarm`, `callSwarm` | Normalizes direct and request-style `window.swarm` providers behind a byte-oriented driver. |
 | Byte/codecs | `utf8ToBytes`, `bytesToBase64`, `jsonToBytes`, `hexToBytes` | Browser-safe encoding helpers without Node `Buffer`. |
 | Identifiers | `deriveIdentifier`, `keccakHex` | Deterministic Keccak-based SOC identifiers from length-prefixed parts. |
 | CAC chunks | `kit.chunks.*` | Raw content-addressed bytes/text/JSON, one chunk payload. |
@@ -97,24 +97,32 @@ console.log(value)
 | Signed documents | `kit.signedDocuments.*` | Canonical signed JSON envelopes with P-256 and Ethereum wallet support. |
 | Provider compliance | `runSwarmProviderCompliance` | Browser-runnable contract checks for real provider behavior. |
 
-## Provider Adapter
+## Driver And Provider Adapter
 
-Swarm Kit only requires a provider-compatible object. In Freedom Browser this is
-usually `window.swarm`, but the adapter also supports request-style providers so
-the library can tolerate API shape changes.
+Swarm Kit primitives depend on a small byte-oriented driver interface. Ordinary
+web apps usually pass Freedom Browser's `window.swarm` provider directly, and
+Swarm Kit wraps it with `createWindowSwarmDriver(...)`.
 
 ```ts
-import { callSwarm, waitForSwarm } from '@freedom/swarm-kit'
+import { createSwarmKit, createWindowSwarmDriver, waitForSwarm } from '@freedom/swarm-kit'
 
 const provider = await waitForSwarm({ requireFreedomBrowser: true })
-await callSwarm(provider, 'swarm_requestAccess')
+const driver = createWindowSwarmDriver(provider)
+const kit = createSwarmKit(driver)
 
-const capabilities = await callSwarm(provider, 'swarm_getCapabilities')
-console.log(capabilities.limits.maxChunkPayloadBytes)
+await kit.requestAccess()
 ```
 
-`createSwarmKit(provider)` binds the same provider to all helper namespaces so
-applications do not have to pass it repeatedly.
+For backwards compatibility, this is equivalent:
+
+```ts
+const kit = createSwarmKit(window.swarm)
+```
+
+Trusted environments, such as Freedom Browser internals, can implement the same
+`SwarmKitDriver` interface directly and bind privileged signer choices at driver
+construction. High-level primitives stay generic and only observe the returned
+SOC `owner`, `identifier`, and `reference`.
 
 ## Identifier Helpers
 

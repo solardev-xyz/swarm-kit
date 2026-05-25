@@ -7,7 +7,7 @@ import {
   type ObjectReadOptions,
   type PublishObjectResult,
 } from './objects.js';
-import type { SwarmProvider } from './provider.js';
+import type { SwarmKitDriverInput } from './driver.js';
 import { verifyMessage, type Address, type Hex } from 'viem';
 
 export type SignatureBytes = Uint8Array | ArrayBuffer;
@@ -144,7 +144,7 @@ export function signedDocumentPayloadBytes(payload: SignedDocumentPayload): Uint
 }
 
 export async function publishSignedDocument<T>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   payload: T,
   options: SignedDocumentOptions & ObjectPublishOptions,
 ): Promise<PublishSignedDocumentResult<T>> {
@@ -157,7 +157,7 @@ export async function publishSignedDocument<T>(
 }
 
 export async function readSignedDocument<T = unknown>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   reference: string,
   options: ObjectReadOptions = {},
 ): Promise<SignedDocumentEnvelope<T>> {
@@ -167,7 +167,7 @@ export async function readSignedDocument<T = unknown>(
 }
 
 export async function readAndVerifySignedDocument<T = unknown>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   reference: string,
   verifier: SignedDocumentVerifier,
   options: ObjectReadOptions = {},

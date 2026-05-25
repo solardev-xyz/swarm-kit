@@ -1,7 +1,8 @@
 import { deriveIdentifier } from './identifiers.js';
 import { isSwarmReason } from './errors.js';
 import { getSigningIdentity, readSocJsonByOwnerAndIdentifier, writeSocJson } from './soc.js';
-import type { SwarmProvider, SwarmWriteSingleOwnerChunkResult } from './provider.js';
+import type { SwarmKitDriverInput } from './driver.js';
+import type { SwarmWriteSingleOwnerChunkResult } from './provider.js';
 
 export type EpochPeriod = 'minute' | 'hour' | 'day' | { seconds: number };
 
@@ -48,7 +49,7 @@ export interface EpochFeed<T = unknown> {
 const DEFAULT_NAMESPACE = 'swarm-kit:epoch-feed:v1';
 
 export function createEpochFeed<T = unknown>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   options: EpochFeedOptions,
 ): EpochFeed<T> {
   const periodMs = periodToMs(options.period);

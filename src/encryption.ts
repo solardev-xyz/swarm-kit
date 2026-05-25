@@ -15,7 +15,7 @@ import {
   type ObjectReadOptions,
   type PublishObjectResult,
 } from './objects.js';
-import type { SwarmProvider } from './provider.js';
+import type { SwarmKitDriverInput } from './driver.js';
 
 export type EncryptionKey = CryptoKey;
 export type PublicEncryptionKey = CryptoKey;
@@ -332,7 +332,7 @@ export async function decryptJsonFrom<T = unknown>(
 }
 
 export async function publishEncryptedBytes(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   bytes: BytesLike,
   key: EncryptionKey,
   options: ObjectPublishOptions = {},
@@ -342,7 +342,7 @@ export async function publishEncryptedBytes(
 }
 
 export async function readEncryptedBytes(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   reference: string,
   key: EncryptionKey,
   options: ObjectReadOptions = {},
@@ -351,7 +351,7 @@ export async function readEncryptedBytes(
 }
 
 export async function publishEncryptedText(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   text: string,
   key: EncryptionKey,
   options: ObjectPublishOptions = {},
@@ -361,7 +361,7 @@ export async function publishEncryptedText(
 }
 
 export async function readEncryptedText(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   reference: string,
   key: EncryptionKey,
   options: ObjectReadOptions = {},
@@ -370,7 +370,7 @@ export async function readEncryptedText(
 }
 
 export async function publishEncryptedJson(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   value: unknown,
   key: EncryptionKey,
   options: ObjectPublishOptions = {},
@@ -380,7 +380,7 @@ export async function publishEncryptedJson(
 }
 
 export async function readEncryptedJson<T = unknown>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   reference: string,
   key: EncryptionKey,
   options: ObjectReadOptions = {},
@@ -389,7 +389,7 @@ export async function readEncryptedJson<T = unknown>(
 }
 
 export async function readEncryptedEnvelope(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   reference: string,
   options: ObjectReadOptions = {},
 ): Promise<EncryptedBytesEnvelope> {
@@ -399,7 +399,7 @@ export async function readEncryptedEnvelope(
 }
 
 export async function publishEncryptedBytesFor(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   bytes: BytesLike,
   recipientPublicKey: PublicEncryptionKeyInput,
   options: ObjectPublishOptions = {},
@@ -409,7 +409,7 @@ export async function publishEncryptedBytesFor(
 }
 
 export async function readEncryptedBytesFrom(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   reference: string,
   recipientPrivateKey: PrivateEncryptionKeyInput,
   options: ObjectReadOptions = {},
@@ -418,7 +418,7 @@ export async function readEncryptedBytesFrom(
 }
 
 export async function publishEncryptedTextFor(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   text: string,
   recipientPublicKey: PublicEncryptionKeyInput,
   options: ObjectPublishOptions = {},
@@ -428,7 +428,7 @@ export async function publishEncryptedTextFor(
 }
 
 export async function readEncryptedTextFrom(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   reference: string,
   recipientPrivateKey: PrivateEncryptionKeyInput,
   options: ObjectReadOptions = {},
@@ -437,7 +437,7 @@ export async function readEncryptedTextFrom(
 }
 
 export async function publishEncryptedJsonFor(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   value: unknown,
   recipientPublicKey: PublicEncryptionKeyInput,
   options: ObjectPublishOptions = {},
@@ -447,7 +447,7 @@ export async function publishEncryptedJsonFor(
 }
 
 export async function readEncryptedJsonFrom<T = unknown>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   reference: string,
   recipientPrivateKey: PrivateEncryptionKeyInput,
   options: ObjectReadOptions = {},
@@ -456,7 +456,7 @@ export async function readEncryptedJsonFrom<T = unknown>(
 }
 
 export async function readPublicKeyEncryptedEnvelope(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   reference: string,
   options: ObjectReadOptions = {},
 ): Promise<PublicKeyEncryptedBytesEnvelope> {
@@ -466,7 +466,7 @@ export async function readPublicKeyEncryptedEnvelope(
 }
 
 function publishEncryptedEnvelope(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   envelope: EncryptedBytesEnvelope,
   options: ObjectPublishOptions,
 ): Promise<PublishEncryptedObjectResult> {
@@ -479,7 +479,7 @@ function publishEncryptedEnvelope(
 }
 
 function publishPublicKeyEncryptedEnvelope(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   envelope: PublicKeyEncryptedBytesEnvelope,
   options: ObjectPublishOptions,
 ): Promise<PublishPublicKeyEncryptedObjectResult> {

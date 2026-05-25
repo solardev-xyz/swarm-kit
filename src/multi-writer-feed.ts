@@ -2,7 +2,8 @@ import { bytesToJson } from './bytes.js';
 import { createIndexedSocStream, assertIndexedSocLimit, type IndexedSocRecord } from './indexed-soc.js';
 import { publishObjectJson, readObjectJson } from './objects.js';
 import { readSocBytesByAddress } from './soc.js';
-import type { SwarmProvider, SwarmWriteSingleOwnerChunkResult } from './provider.js';
+import type { SwarmKitDriverInput } from './driver.js';
+import type { SwarmWriteSingleOwnerChunkResult } from './provider.js';
 
 export interface MultiWriterFeedOptions {
   topic: string;
@@ -71,7 +72,7 @@ const DEFAULT_MULTI_WRITER_NAMESPACE = 'swarm-kit:multi-writer-feed:v1';
 const DEFAULT_WRITER_ID = 'default';
 
 export function createMultiWriterFeed<T = unknown>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   options: MultiWriterFeedOptions,
 ): MultiWriterFeed<T> {
   const namespace = options.namespace ?? DEFAULT_MULTI_WRITER_NAMESPACE;

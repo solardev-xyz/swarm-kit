@@ -7,7 +7,8 @@ import {
   writeSocJson,
   type ReadSocBytesResult,
 } from './soc.js';
-import type { SwarmProvider, SwarmWriteSingleOwnerChunkResult } from './provider.js';
+import type { SwarmKitDriverInput } from './driver.js';
+import type { SwarmWriteSingleOwnerChunkResult } from './provider.js';
 
 export interface FindLatestIndexOptions {
   maxIndex?: number;
@@ -80,7 +81,7 @@ const DEFAULT_LABEL = 'indexed SOC stream';
 const DEFAULT_MAX_APPEND_ATTEMPTS = 3;
 
 export function createIndexedSocStream<TEnvelope extends IndexedSocEnvelope>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   options: IndexedSocStreamOptions<TEnvelope>,
 ): IndexedSocStream<TEnvelope> {
   const parts = options.parts ?? [];

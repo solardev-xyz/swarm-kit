@@ -2,6 +2,7 @@ export * from './bytes.js';
 export * from './chunks.js';
 export * from './client.js';
 export * from './did.js';
+export * from './driver.js';
 export * from './encryption.js';
 export * from './epoch-feed.js';
 export * from './errors.js';

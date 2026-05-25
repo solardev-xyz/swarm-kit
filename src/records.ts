@@ -1,7 +1,8 @@
 import { createIndexedSocStream, assertIndexedSocLimit, type IndexedSocEnvelope, type IndexedSocRecord, type IndexedSocStreamEntry } from './indexed-soc.js';
 import { publishObjectJson, readObjectJson } from './objects.js';
 import { SwarmKitError } from './errors.js';
-import type { SwarmProvider, SwarmWriteSingleOwnerChunkResult } from './provider.js';
+import type { SwarmKitDriverInput } from './driver.js';
+import type { SwarmWriteSingleOwnerChunkResult } from './provider.js';
 
 export interface OwnerRecordsOptions {
   namespace: string;
@@ -63,7 +64,7 @@ export interface OwnerRecords<T = unknown> {
 const DEFAULT_RECORDS_LABEL = 'owner records';
 
 export function createOwnerRecords<T = unknown>(
-  provider: SwarmProvider,
+  provider: SwarmKitDriverInput,
   options: OwnerRecordsOptions,
 ): OwnerRecords<T> {
   const namespace = normalizeNamespace(options.namespace);
