@@ -621,6 +621,58 @@ npm run dev:playground
 
 Then open `http://127.0.0.1:4173/` in Freedom Browser.
 
+## Discovery And Storage Policy Notes
+
+Several primitives in this package produce useful owner-addressed structures,
+but they do not by themselves solve discovery. For example, a multi-writer feed
+reader still needs to know which `{ owner, writerId }` pairs to read, and a
+mailbox-style app still needs a way to discover a recipient's public keys and
+delivery records.
+
+Candidate discovery layers include:
+
+- explicit share links that contain owners, topics, and record keys
+- wallet-owned or Freedom-owned identity/key-directory records
+- group manifests that list accepted writers for a topic
+- open "graffiti feed" style signal feeds, as described in
+  [FIP-62](https://github.com/fairDataSociety/FIPs/blob/master/text/0062-graffiti-feed.md)
+
+Graffiti feeds are best treated as an open signaling/discovery layer, not as a
+replacement for trusted membership. A likely mature shape is:
+
+```text
+open discovery signal -> owner records / writer streams -> optional group manifest -> reducers or app state
+```
+
+Storage policy is another layer Swarm Kit does not currently control. Swarm
+postage batches can be immutable or mutable. Immutable batches are appropriate
+for archival records, signed documents, identity data, commit-reveal history,
+and audit logs. Mutable batches can be useful for frequently updated or
+ephemeral signals such as presence, latest-status feeds, graffiti discovery, or
+GSOC-style messages. See the
+[Swarm postage stamp documentation](https://docs.ethswarm.org/docs/concepts/incentives/postage-stamps/)
+for the underlying batch behavior.
+
+At the time of writing, Freedom Browser's `window.swarm` API does not expose
+postage-batch mutability or any per-write storage policy. Swarm Kit therefore
+cannot request "mutable" or "immutable" storage from the provider; it simply
+publishes chunks through the available driver. A future provider or internal
+Freedom driver could expose this as a storage policy, for example:
+
+```ts
+const kit = createSwarmKit(createWindowSwarmDriver(window.swarm, {
+  storage: { mutability: 'immutable' },
+}))
+
+await feed.write(value, {
+  storage: { mutability: 'mutable' },
+})
+```
+
+That API is illustrative only. The important design point is that high-level
+primitives can signal their storage needs, while Freedom Browser or another
+driver decides which postage batch to use.
+
 ## Responsibility Split
 
 Swarm Kit provides generic, deterministic, browser-friendly data structures over
@@ -640,6 +692,8 @@ Applications should define:
 Not included yet:
 
 - wallet-bound recipient key discovery and exchange
+- open discovery/graffiti signal conventions
+- storage policy controls for mutable vs immutable postage batches
 - CRDT conflict resolution on top of multi-writer entries
 - mailbox/inbox discovery conventions
 - Bee-compatible ACT abstractions
