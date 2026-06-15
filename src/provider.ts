@@ -50,11 +50,55 @@ export interface SwarmReadSingleOwnerChunkResult extends SwarmChunkReadResult {
   signature?: string;
 }
 
+export interface SwarmCreateFeedResult {
+  feedId: string;
+  owner: string;
+  topic: string;
+  manifestReference: string;
+  bzzUrl: string;
+  identityMode?: string;
+}
+
+export interface SwarmUpdateFeedResult {
+  feedId: string;
+  reference: string;
+  bzzUrl: string;
+  index: number;
+}
+
+export interface SwarmWriteFeedEntryResult {
+  index: number;
+}
+
+export interface SwarmReadFeedEntryResult {
+  data: string;
+  encoding: 'base64';
+  index: number;
+  nextIndex: number | null;
+}
+
+export interface SwarmFeedRecord {
+  name: string;
+  owner: string;
+  topic: string;
+  manifestReference: string;
+  bzzUrl: string;
+  identityMode?: string;
+  createdAt?: number;
+  lastUpdated: number | null;
+  lastReference: string | null;
+}
+
 export interface SwarmProvider {
   isFreedomBrowser?: boolean;
   request?: <T = unknown>(request: { method: string; params?: unknown }) => Promise<T>;
   requestAccess?: () => Promise<unknown>;
   getCapabilities?: () => Promise<SwarmCapabilities>;
+  createFeed?: (params: { name: string }) => Promise<SwarmCreateFeedResult>;
+  updateFeed?: (params: { feedId: string; reference: string }) => Promise<SwarmUpdateFeedResult>;
+  writeFeedEntry?: (params: { name: string; data: string | Uint8Array | ArrayBuffer; index?: number }) => Promise<SwarmWriteFeedEntryResult>;
+  readFeedEntry?: (params: { name: string; owner?: string; index?: number } | { topic: string; owner: string; index?: number }) => Promise<SwarmReadFeedEntryResult>;
+  listFeeds?: () => Promise<SwarmFeedRecord[]>;
   publishChunk?: (params: { data: string | Uint8Array | ArrayBuffer; span?: number | bigint }) => Promise<SwarmPublishChunkResult>;
   readChunk?: (params: { reference: string }) => Promise<SwarmChunkReadResult>;
   writeSingleOwnerChunk?: (params: { identifier: string; data: string | Uint8Array | ArrayBuffer; span?: number | bigint }) => Promise<SwarmWriteSingleOwnerChunkResult>;
@@ -123,6 +167,11 @@ function directMethodName(method: string): keyof SwarmProvider | null {
   switch (method) {
     case 'swarm_requestAccess': return 'requestAccess';
     case 'swarm_getCapabilities': return 'getCapabilities';
+    case 'swarm_createFeed': return 'createFeed';
+    case 'swarm_updateFeed': return 'updateFeed';
+    case 'swarm_writeFeedEntry': return 'writeFeedEntry';
+    case 'swarm_readFeedEntry': return 'readFeedEntry';
+    case 'swarm_listFeeds': return 'listFeeds';
     case 'swarm_publishChunk': return 'publishChunk';
     case 'swarm_readChunk': return 'readChunk';
     case 'swarm_writeSingleOwnerChunk': return 'writeSingleOwnerChunk';

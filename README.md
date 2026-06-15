@@ -599,6 +599,42 @@ npm run dev:provider-compliance
 
 Then open `http://127.0.0.1:4175/` in Freedom Browser and run the checks.
 
+## Provider Test Center
+
+The provider test center is a broader browser-runnable diagnostic page for
+comparing real `window.swarm` implementations, especially Bee-backed Freedom
+Browser versus Ant-backed Freedom Browser. It runs selectable suites for:
+
+- provider bootstrap and signing identity stability
+- CAC roundtrips and missing reads
+- SOC reads by address and by `(owner, identifier)`
+- native feed journal exact-index semantics
+- indexed SOC streams
+- high-level Swarm Kit primitives
+- focused diagnostics for CAC size boundaries, delayed reads, native feed
+  timelines, sparse feed timelines, and indexed SOC timelines
+- optional SOC/feed stress checks
+
+```sh
+npm run dev:test-center
+```
+
+Then open `http://127.0.0.1:4176/` in Freedom Browser, select suites, run, and
+copy or download the JSON report.
+
+Recommended provider comparison workflow:
+
+1. Run the default selected suites in Bee-backed Freedom Browser. Keep `Stress`
+   disabled for the first baseline run.
+2. Save the JSON report.
+3. Run the same selected suites in the provider implementation under test, such
+   as Ant-backed Freedom Browser.
+4. Compare pass/fail summaries and failing step details. The diagnostics suite
+   includes exact owner, topic, identifier, index, reference, expected value, and
+   observed error data where available.
+
+Example Bee/Ant comparison reports live in `docs/reports`.
+
 ## Playground
 
 The playground in `examples/epoch-feed-smoke` exercises the high-level

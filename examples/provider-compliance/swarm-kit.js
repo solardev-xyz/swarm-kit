@@ -2660,7 +2660,7 @@ function weierstrass(curveDef) {
   function prepSig(msgHash, privateKey, opts = defaultSigOpts) {
     if (["recovered", "canonical"].some((k) => k in opts))
       throw new Error("sign() legacy options not supported");
-    const { hash, randomBytes: randomBytes4 } = CURVE;
+    const { hash, randomBytes: randomBytes5 } = CURVE;
     let { lowS, prehash, extraEntropy: ent } = opts;
     if (lowS == null)
       lowS = true;
@@ -2672,7 +2672,7 @@ function weierstrass(curveDef) {
     const d = normPrivateKeyToScalar(privateKey);
     const seedArgs = [int2octets(d), int2octets(h1int)];
     if (ent != null && ent !== false) {
-      const e = ent === true ? randomBytes4(Fp.BYTES) : ent;
+      const e = ent === true ? randomBytes5(Fp.BYTES) : ent;
       seedArgs.push(ensureBytes("extraEntropy", e));
     }
     const seed = concatBytes4(...seedArgs);
@@ -3540,6 +3540,16 @@ function directMethodName(method) {
       return "requestAccess";
     case "swarm_getCapabilities":
       return "getCapabilities";
+    case "swarm_createFeed":
+      return "createFeed";
+    case "swarm_updateFeed":
+      return "updateFeed";
+    case "swarm_writeFeedEntry":
+      return "writeFeedEntry";
+    case "swarm_readFeedEntry":
+      return "readFeedEntry";
+    case "swarm_listFeeds":
+      return "listFeeds";
     case "swarm_publishChunk":
       return "publishChunk";
     case "swarm_readChunk":
@@ -6109,6 +6119,1213 @@ function now() {
 function elapsed(started) {
   return Math.max(0, Math.round((now() - started) * 10) / 10);
 }
+
+// src/provider-test-center.ts
+var DEFAULT_SUITES = [
+  "bootstrap",
+  "cac",
+  "soc",
+  "feed",
+  "indexed-soc",
+  "primitives",
+  "diagnostics"
+];
+var DEFAULT_OPTIONS2 = {
+  requestAccess: true,
+  stress: {
+    socWrites: 5,
+    feedWrites: 5
+  }
+};
+async function runSwarmProviderTestCenter(provider, options = {}) {
+  const runId = options.runId ?? createRunId2();
+  const selectedSuites = Array.from(new Set(options.suites ?? DEFAULT_SUITES));
+  const effective = {
+    requestAccess: options.requestAccess ?? DEFAULT_OPTIONS2.requestAccess,
+    stress: {
+      socWrites: options.stress?.socWrites ?? DEFAULT_OPTIONS2.stress.socWrites,
+      feedWrites: options.stress?.feedWrites ?? DEFAULT_OPTIONS2.stress.feedWrites
+    }
+  };
+  const startedAt = (/* @__PURE__ */ new Date()).toISOString();
+  const context = {
+    provider,
+    kit: createSwarmKit(provider),
+    runId
+  };
+  const results = [];
+  for (const testCase of createTestCases(effective)) {
+    if (!selectedSuites.includes(testCase.suite)) continue;
+    results.push(await runTestCase(testCase, context));
+  }
+  const finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+  return {
+    runId,
+    startedAt,
+    finishedAt,
+    selectedSuites,
+    summary: summarizeResults2(results),
+    results
+  };
+}
+function createTestCases(options) {
+  return [
+    {
+      id: "bootstrap-request-access",
+      suite: "bootstrap",
+      label: "requestAccess resolves",
+      enabled: options.requestAccess,
+      skipReason: "disabled by options",
+      run: async (context) => summarizeValue2(await callSwarm(context.provider, "swarm_requestAccess"))
+    },
+    {
+      id: "bootstrap-capabilities",
+      suite: "bootstrap",
+      label: "getCapabilities exposes limits",
+      run: async (context) => {
+        const capabilities = await callSwarm(context.provider, "swarm_getCapabilities");
+        assertCondition(typeof capabilities.canPublish === "boolean", "capabilities.canPublish must be boolean");
+        context.capabilities = capabilities;
+        return {
+          specVersion: capabilities.specVersion ?? null,
+          canPublish: capabilities.canPublish,
+          reason: capabilities.reason,
+          limits: capabilities.limits ?? null
+        };
+      }
+    },
+    {
+      id: "bootstrap-signing-identity",
+      suite: "bootstrap",
+      label: "getSigningIdentity returns stable owner",
+      run: async (context) => {
+        const first = await callSwarm(context.provider, "swarm_getSigningIdentity");
+        const second = await callSwarm(context.provider, "swarm_getSigningIdentity");
+        assertOwner2(first.owner);
+        assertSameLower2(second.owner, first.owner, "signing owner");
+        context.identity = first;
+        return {
+          owner: first.owner,
+          identityMode: first.identityMode ?? null
+        };
+      }
+    },
+    {
+      id: "cac-small-roundtrip",
+      suite: "cac",
+      label: "CAC small byte roundtrip",
+      run: async (context) => {
+        const text = `swarm-kit test center CAC ${context.runId}`;
+        const published = await context.kit.chunks.publishText(text);
+        const read = await context.kit.chunks.readText(published.reference);
+        assertEqual(read, text, "CAC text");
+        context.cac = { reference: published.reference, text };
+        return {
+          reference: published.reference,
+          bytes: utf8ToBytes(text).length
+        };
+      }
+    },
+    {
+      id: "cac-4096-roundtrip",
+      suite: "cac",
+      label: "CAC 4096-byte roundtrip",
+      run: async (context) => {
+        const text = "x".repeat(4096);
+        const published = await context.kit.chunks.publishText(text);
+        const read = await context.kit.chunks.readText(published.reference);
+        assertEqual(read.length, text.length, "CAC 4096-byte length");
+        assertEqual(read, text, "CAC 4096-byte payload");
+        return {
+          reference: published.reference,
+          bytes: text.length
+        };
+      }
+    },
+    {
+      id: "cac-missing",
+      suite: "cac",
+      label: "Missing CAC returns chunk_not_found",
+      run: async (context) => expectProviderReason2(
+        () => context.kit.chunks.readBytes(missingReference2(context.runId, "cac")),
+        "chunk_not_found"
+      )
+    },
+    {
+      id: "soc-roundtrip-address",
+      suite: "soc",
+      label: "SOC write/read by address",
+      run: async (context) => {
+        const text = `swarm-kit test center SOC ${context.runId}`;
+        const identifier = deriveIdentifier(["swarm-kit:test-center:soc", context.runId, "roundtrip"]);
+        const written = await context.kit.soc.writeText(identifier, text);
+        const read = await context.kit.soc.readTextByAddress(written.reference);
+        assertEqual(read, text, "SOC text by address");
+        context.soc = {
+          reference: written.reference,
+          owner: written.owner,
+          identifier,
+          text
+        };
+        return {
+          reference: written.reference,
+          owner: written.owner,
+          identifier
+        };
+      }
+    },
+    {
+      id: "soc-roundtrip-owner-identifier",
+      suite: "soc",
+      label: "SOC read by owner and identifier",
+      run: async (context) => {
+        const soc = requireSoc2(context);
+        const read = await context.kit.soc.readTextByOwnerAndIdentifier(soc.owner, soc.identifier);
+        assertEqual(read, soc.text, "SOC text by owner+identifier");
+        return {
+          reference: soc.reference,
+          owner: soc.owner,
+          identifier: soc.identifier
+        };
+      }
+    },
+    {
+      id: "soc-missing-owner-identifier",
+      suite: "soc",
+      label: "Missing SOC by owner+identifier returns chunk_not_found",
+      run: async (context) => {
+        const owner = context.soc?.owner ?? context.identity?.owner;
+        if (!owner) throw new Error("No owner available for missing SOC probe");
+        return expectProviderReason2(
+          () => context.kit.soc.readBytesByOwnerAndIdentifier(owner, missingReference2(context.runId, "soc-owner-identifier")),
+          "chunk_not_found"
+        );
+      }
+    },
+    {
+      id: "soc-missing-address",
+      suite: "soc",
+      label: "Missing SOC by address returns chunk_not_found",
+      run: async (context) => expectProviderReason2(
+        () => context.kit.soc.readBytesByAddress(missingReference2(context.runId, "soc-address")),
+        "chunk_not_found"
+      )
+    },
+    {
+      id: "soc-cac-type-mismatch",
+      suite: "soc",
+      label: "CAC read as SOC returns chunk_type_mismatch",
+      run: async (context) => {
+        const cac = requireCac2(context);
+        return expectProviderReason2(
+          () => context.kit.soc.readBytesByAddress(cac.reference),
+          "chunk_type_mismatch"
+        );
+      }
+    },
+    {
+      id: "soc-as-cac-type-mismatch",
+      suite: "soc",
+      label: "SOC read as CAC returns chunk_type_mismatch",
+      run: async (context) => {
+        const soc = requireSoc2(context);
+        return expectProviderReason2(
+          () => context.kit.chunks.readBytes(soc.reference),
+          "chunk_type_mismatch"
+        );
+      }
+    },
+    {
+      id: "feed-create",
+      suite: "feed",
+      label: "createFeed returns feed coordinates",
+      run: async (context) => {
+        const name = feedName(context.runId, "journal");
+        const feed = await callSwarm(context.provider, "swarm_createFeed", { name });
+        assertEqual(feed.feedId, name, "feedId");
+        assertOwner2(feed.owner);
+        assertHex2(feed.topic, 32, "feed topic");
+        context.feed = {
+          name,
+          owner: feed.owner,
+          topic: feed.topic,
+          writes: []
+        };
+        return summarizeFeed(feed);
+      }
+    },
+    {
+      id: "feed-auto-index-0",
+      suite: "feed",
+      label: "writeFeedEntry auto-writes index 0",
+      run: async (context) => {
+        const feed = requireFeed(context);
+        const text = feedPayload(context.runId, "auto-0");
+        const write = await writeFeedEntry(context.provider, { name: feed.name, data: text });
+        assertEqual(write.index, 0, "first feed index");
+        feed.writes.push({ index: write.index, text });
+        return {
+          name: feed.name,
+          index: write.index,
+          bytes: utf8ToBytes(text).length
+        };
+      }
+    },
+    {
+      id: "feed-read-index-0-name",
+      suite: "feed",
+      label: "readFeedEntry reads exact index 0 by name",
+      run: async (context) => {
+        const feed = requireFeed(context);
+        const expected = requireFeedWrite(feed, 0);
+        const read = await readFeedEntry(context.provider, { name: feed.name, index: 0 });
+        assertEqual(read.index, 0, "read feed index");
+        assertEqual(decodeFeedText(read), expected.text, "feed index 0 payload");
+        return summarizeFeedRead(feed, read);
+      }
+    },
+    {
+      id: "feed-auto-index-1-latest",
+      suite: "feed",
+      label: "readFeedEntry latest returns highest index and nextIndex",
+      run: async (context) => {
+        const feed = requireFeed(context);
+        const text = feedPayload(context.runId, "auto-1");
+        const write = await writeFeedEntry(context.provider, { name: feed.name, data: text });
+        assertEqual(write.index, 1, "second feed index");
+        feed.writes.push({ index: write.index, text });
+        const latest = await readFeedEntry(context.provider, { name: feed.name });
+        assertEqual(latest.index, 1, "latest feed index");
+        assertEqual(latest.nextIndex, 2, "latest nextIndex");
+        assertEqual(decodeFeedText(latest), text, "latest feed payload");
+        return summarizeFeedRead(feed, latest);
+      }
+    },
+    {
+      id: "feed-sparse-index-write-read",
+      suite: "feed",
+      label: "Sparse explicit feed index uses exact-match semantics",
+      run: async (context) => {
+        const feed = requireFeed(context);
+        const text = feedPayload(context.runId, "sparse-5");
+        const write = await writeFeedEntry(context.provider, { name: feed.name, data: text, index: 5 });
+        assertEqual(write.index, 5, "sparse feed index");
+        feed.writes.push({ index: write.index, text });
+        const read = await readFeedEntry(context.provider, { name: feed.name, index: 5 });
+        assertEqual(read.index, 5, "sparse read index");
+        assertEqual(decodeFeedText(read), text, "sparse feed payload");
+        return summarizeFeedRead(feed, read);
+      }
+    },
+    {
+      id: "feed-missing-index-exact",
+      suite: "feed",
+      label: "Missing explicit feed index returns entry_not_found",
+      run: async (context) => {
+        const feed = requireFeed(context);
+        return expectProviderReason2(
+          () => readFeedEntry(context.provider, { name: feed.name, index: 4 }),
+          "entry_not_found"
+        );
+      }
+    },
+    {
+      id: "feed-overwrite-protection",
+      suite: "feed",
+      label: "Occupied explicit feed index returns index_already_exists",
+      run: async (context) => {
+        const feed = requireFeed(context);
+        return expectProviderReason2(
+          () => writeFeedEntry(context.provider, {
+            name: feed.name,
+            data: feedPayload(context.runId, "duplicate-5"),
+            index: 5
+          }),
+          "index_already_exists"
+        );
+      }
+    },
+    {
+      id: "feed-read-topic-owner",
+      suite: "feed",
+      label: "readFeedEntry reads by raw topic and owner",
+      run: async (context) => {
+        const feed = requireFeed(context);
+        const expected = requireFeedWrite(feed, 0);
+        const read = await readFeedEntry(context.provider, { topic: feed.topic, owner: feed.owner, index: 0 });
+        assertEqual(read.index, 0, "topic+owner read index");
+        assertEqual(decodeFeedText(read), expected.text, "topic+owner feed payload");
+        return summarizeFeedRead(feed, read);
+      }
+    },
+    {
+      id: "feed-list-includes-created-feed",
+      suite: "feed",
+      label: "listFeeds includes created feed",
+      run: async (context) => {
+        const feed = requireFeed(context);
+        const feeds = await callSwarm(context.provider, "swarm_listFeeds");
+        const match = feeds.find((item) => item.name === feed.name);
+        assertCondition(Boolean(match), `listFeeds did not include ${feed.name}`);
+        return {
+          count: feeds.length,
+          match
+        };
+      }
+    },
+    {
+      id: "indexed-soc-append-read",
+      suite: "indexed-soc",
+      label: "Indexed SOC stream appends and discovers latest",
+      run: async (context) => {
+        const stream = createTestIndexedStream(context);
+        const first = await stream.append(({ index, previousReference }) => ({
+          version: 1,
+          type: "swarm-kit:test-center:indexed-soc-entry",
+          index,
+          previousReference,
+          value: "first"
+        }));
+        const second = await stream.append(({ index, previousReference }) => ({
+          version: 1,
+          type: "swarm-kit:test-center:indexed-soc-entry",
+          index,
+          previousReference,
+          value: "second"
+        }));
+        const third = await stream.append(({ index, previousReference }) => ({
+          version: 1,
+          type: "swarm-kit:test-center:indexed-soc-entry",
+          index,
+          previousReference,
+          value: "third"
+        }));
+        assertEqual(first.envelope.index, 0, "first indexed SOC index");
+        assertEqual(second.envelope.index, 1, "second indexed SOC index");
+        assertEqual(third.envelope.index, 2, "third indexed SOC index");
+        assertSameLower2(second.envelope.previousReference ?? "", first.reference, "second previous reference");
+        assertSameLower2(third.envelope.previousReference ?? "", second.reference, "third previous reference");
+        const latestIndex = await stream.findLatestIndex(third.owner);
+        const latest = await stream.readLatest(third.owner, { limit: 3 });
+        assertEqual(latestIndex, 2, "latest indexed SOC index");
+        assertEqual(latest.map((entry) => entry.envelope.value).join(","), "third,second,first", "indexed SOC latest order");
+        return {
+          owner: third.owner,
+          latestIndex,
+          references: latest.map((entry) => entry.reference)
+        };
+      }
+    },
+    {
+      id: "indexed-soc-missing-next",
+      suite: "indexed-soc",
+      label: "Indexed SOC missing next index returns null",
+      run: async (context) => {
+        const stream = createTestIndexedStream(context);
+        const owner = await stream.getOwner();
+        const missing = await stream.readAt(owner, 3);
+        assertEqual(missing, null, "missing indexed SOC entry");
+        return { owner, missingIndex: 3 };
+      }
+    },
+    {
+      id: "primitive-object-graph",
+      suite: "primitives",
+      label: "Object graph stores payload above one raw chunk",
+      run: async (context) => {
+        const text = `swarm-kit test center object ${context.runId}
+${"payload-".repeat(800)}`;
+        const published = await context.kit.objects.publishText(text);
+        const read = await context.kit.objects.readText(published.reference);
+        assertEqual(read, text, "object graph text");
+        return {
+          reference: published.reference,
+          size: published.size,
+          chunkCount: published.chunkCount,
+          nodeCount: published.nodeCount
+        };
+      }
+    },
+    {
+      id: "primitive-epoch-feed",
+      suite: "primitives",
+      label: "Epoch feed write/readLatest",
+      run: async (context) => {
+        const feed = context.kit.epochFeed.create({
+          topic: `swarm-kit-test-center-epoch-${context.runId}`,
+          period: "minute"
+        });
+        const at = Date.now();
+        const owner = await feed.getOwner();
+        const written = await feed.write({ status: "ok" }, { at });
+        const read = await feed.readLatest(owner, { from: at, lookback: 3 });
+        assertCondition(Boolean(read), "epoch feed readLatest returned null");
+        assertEqual(read?.value.status, "ok", "epoch feed value");
+        return {
+          owner,
+          reference: written.reference,
+          identifier: written.identifier,
+          epochStartMs: written.epochStartMs
+        };
+      }
+    },
+    {
+      id: "primitive-hash-chain",
+      suite: "primitives",
+      label: "Hash chain appends and walks previous references",
+      run: async (context) => {
+        const chain = context.kit.hashChain.create({
+          topic: `swarm-kit-test-center-chain-${context.runId}`
+        });
+        const first = await chain.append({ step: 1 });
+        const second = await chain.append({ step: 2 });
+        const latest = await chain.readLatest(second.owner, { limit: 2 });
+        assertEqual(first.index, 0, "first hash chain index");
+        assertEqual(second.index, 1, "second hash chain index");
+        assertEqual(latest.length, 2, "hash chain latest count");
+        assertEqual(latest[0]?.index, 1, "hash chain latest index");
+        assertEqual(latest[1]?.index, 0, "hash chain previous index");
+        assertEqual(latest[0]?.payload.step, 2, "hash chain latest payload");
+        assertSameLower2(second.previousReference ?? "", first.reference, "hash chain previous reference");
+        return {
+          owner: second.owner,
+          latest: latest.map((entry) => ({ index: entry.index, reference: entry.reference }))
+        };
+      }
+    },
+    {
+      id: "primitive-multi-writer-feed",
+      suite: "primitives",
+      label: "Multi-writer feed single-writer stream works",
+      run: async (context) => {
+        const feed = context.kit.multiWriterFeed.create({
+          topic: `swarm-kit-test-center-multi-${context.runId}`,
+          writerId: "local"
+        });
+        const first = await feed.append({ step: 1 });
+        const second = await feed.append({ step: 2 });
+        const entries = await feed.readWriter(second.owner, { writerId: "local", limit: 2 });
+        assertEqual(first.index, 0, "first multi-writer index");
+        assertEqual(second.index, 1, "second multi-writer index");
+        assertEqual(entries.length, 2, "multi-writer entry count");
+        assertEqual(entries[0]?.index, 1, "multi-writer latest index");
+        assertEqual(entries[1]?.index, 0, "multi-writer previous index");
+        assertEqual(entries[0]?.payload.step, 2, "multi-writer latest payload");
+        assertSameLower2(second.previousReference ?? "", first.reference, "multi-writer previous reference");
+        return {
+          owner: second.owner,
+          entries: entries.map((entry) => ({ index: entry.index, reference: entry.reference }))
+        };
+      }
+    },
+    {
+      id: "primitive-keyed-lookup",
+      suite: "primitives",
+      label: "Keyed lookup writes and reads latest value",
+      run: async (context) => {
+        const lookup = context.kit.lookup.create({
+          namespace: `swarm-kit-test-center-lookup-${context.runId}`
+        });
+        const first = await lookup.write("key", { value: "first" });
+        const second = await lookup.write("key", { value: "second" });
+        const latest = await lookup.readLatest(second.owner, "key");
+        assertEqual(first.index, 0, "first keyed lookup index");
+        assertEqual(second.index, 1, "second keyed lookup index");
+        assertEqual(latest?.index, 1, "keyed lookup latest index");
+        assertEqual(latest?.value.value, "second", "keyed lookup latest value");
+        assertSameLower2(second.previousReference ?? "", first.reference, "keyed lookup previous reference");
+        return {
+          owner: second.owner,
+          latest: latest ? { index: latest.index, reference: latest.reference } : null
+        };
+      }
+    },
+    {
+      id: "primitive-commit-reveal",
+      suite: "primitives",
+      label: "Commit-reveal commit/read/reveal/readPair",
+      run: async (context) => {
+        const protocol = context.kit.commitReveal.create({
+          topic: `swarm-kit-test-center-commit-${context.runId}`,
+          round: "round-1"
+        });
+        const salt = context.kit.commitReveal.generateSalt();
+        const commit = await protocol.commit({ vote: "yes" }, { salt });
+        const reveal = await protocol.reveal({ vote: "yes" }, salt);
+        const pair = await protocol.readPair(commit.owner);
+        assertEqual(pair.verified, true, "commit-reveal verification");
+        return {
+          owner: commit.owner,
+          commitReference: commit.reference,
+          revealReference: reveal.reference,
+          verified: pair.verified
+        };
+      }
+    },
+    {
+      id: "diagnostics-cac-size-matrix",
+      suite: "diagnostics",
+      label: "Diagnostics: CAC size matrix immediate read-after-write",
+      run: async (context) => {
+        const sizes = [1, 31, 32, 33, 42, 100, 1e3, 4095, 4096, 4097, 8192];
+        const steps = [];
+        for (const size2 of sizes) {
+          steps.push(await captureStep(`cac-size-${size2}`, async () => {
+            const text = payloadOfSize(size2, `cac:${context.runId}:${size2}`);
+            if (size2 > 4096) {
+              const error = await expectProviderReason2(
+                () => context.kit.chunks.publishText(text),
+                "payload_too_large"
+              );
+              return {
+                size: size2,
+                expectedRejection: true,
+                error
+              };
+            }
+            const published = await context.kit.chunks.publishText(text);
+            const read = await context.kit.chunks.readText(published.reference);
+            assertEqual(read.length, text.length, `CAC size ${size2} read length`);
+            assertEqual(read, text, `CAC size ${size2} payload`);
+            return {
+              size: size2,
+              reference: published.reference
+            };
+          }));
+        }
+        assertDiagnosticSteps(steps, "CAC size matrix failed");
+        return { sizes, steps };
+      }
+    },
+    {
+      id: "diagnostics-cac-delayed-small-read",
+      suite: "diagnostics",
+      label: "Diagnostics: CAC small chunk delayed read-after-write",
+      run: async (context) => {
+        const size2 = 42;
+        const text = payloadOfSize(size2, `cac-delayed:${context.runId}`);
+        const published = await context.kit.chunks.publishText(text);
+        const delays = [0, 250, 1e3, 3e3];
+        const steps = [];
+        for (const delayMs of delays) {
+          steps.push(await captureStep(`read-after-${delayMs}ms`, async () => {
+            if (delayMs > 0) await sleep2(delayMs);
+            const read = await context.kit.chunks.readText(published.reference);
+            assertEqual(read, text, `CAC delayed read after ${delayMs}ms`);
+            return {
+              delayMs,
+              reference: published.reference,
+              size: size2
+            };
+          }));
+        }
+        assertDiagnosticSteps(steps, "CAC delayed read failed");
+        return {
+          size: size2,
+          reference: published.reference,
+          steps
+        };
+      }
+    },
+    {
+      id: "diagnostics-cac-uniform-4096-read",
+      suite: "diagnostics",
+      label: "Diagnostics: CAC uniform 4096-byte delayed read-after-write",
+      run: async (context) => {
+        const size2 = 4096;
+        const text = "x".repeat(size2);
+        const published = await context.kit.chunks.publishText(text);
+        const delays = [0, 250, 1e3, 3e3];
+        const steps = [];
+        for (const delayMs of delays) {
+          steps.push(await captureStep(`read-after-${delayMs}ms`, async () => {
+            if (delayMs > 0) await sleep2(delayMs);
+            const read = await context.kit.chunks.readText(published.reference);
+            assertEqual(read.length, text.length, `CAC uniform 4096 read length after ${delayMs}ms`);
+            assertEqual(read, text, `CAC uniform 4096 payload after ${delayMs}ms`);
+            return {
+              delayMs,
+              reference: published.reference,
+              size: size2,
+              payload: "x.repeat(4096)"
+            };
+          }));
+        }
+        assertDiagnosticSteps(steps, "CAC uniform 4096 delayed read failed");
+        return {
+          size: size2,
+          payload: "x.repeat(4096)",
+          reference: published.reference,
+          steps
+        };
+      }
+    },
+    {
+      id: "diagnostics-soc-address-owner-timeline",
+      suite: "diagnostics",
+      label: "Diagnostics: SOC read by address versus owner+identifier",
+      run: async (context) => {
+        const identifier = deriveIdentifier(["swarm-kit:test-center:diagnostics:soc-address", context.runId]);
+        const text = `swarm-kit diagnostics SOC address ${context.runId}`;
+        let written = null;
+        const steps = [];
+        steps.push(await captureStep("write-soc", async () => {
+          written = await context.kit.soc.writeText(identifier, text);
+          assertSameLower2(written.identifier, identifier, "diagnostic SOC identifier");
+          return written;
+        }));
+        for (const delayMs of [0, 250, 1e3, 3e3]) {
+          steps.push(await captureStep(`read-address-after-${delayMs}ms`, async () => {
+            if (!written) throw new Error("SOC write did not produce coordinates");
+            if (delayMs > 0) await sleep2(delayMs);
+            const read = await context.kit.soc.readTextByAddress(written.reference);
+            assertEqual(read, text, `SOC address read after ${delayMs}ms`);
+            return {
+              delayMs,
+              reference: written.reference,
+              owner: written.owner,
+              identifier: written.identifier,
+              text: read
+            };
+          }));
+        }
+        for (const delayMs of [0, 250, 1e3, 3e3]) {
+          steps.push(await captureStep(`read-owner-identifier-after-${delayMs}ms`, async () => {
+            if (!written) throw new Error("SOC write did not produce coordinates");
+            if (delayMs > 0) await sleep2(delayMs);
+            const read = await context.kit.soc.readTextByOwnerAndIdentifier(written.owner, written.identifier);
+            assertEqual(read, text, `SOC owner+identifier read after ${delayMs}ms`);
+            return {
+              delayMs,
+              reference: written.reference,
+              owner: written.owner,
+              identifier: written.identifier,
+              text: read
+            };
+          }));
+        }
+        assertDiagnosticSteps(steps, "SOC address versus owner+identifier timeline failed");
+        return {
+          coordinates: written,
+          steps
+        };
+      }
+    },
+    {
+      id: "diagnostics-feed-auto-timeline",
+      suite: "diagnostics",
+      label: "Diagnostics: native feed auto-index timeline",
+      run: async (context) => {
+        const name = feedName(context.runId, "diag-auto");
+        let feed = null;
+        const payload0 = feedPayload(context.runId, "diag-auto-0");
+        const payload1 = feedPayload(context.runId, "diag-auto-1");
+        const steps = [];
+        steps.push(await captureStep("create-feed", async () => {
+          feed = await callSwarm(context.provider, "swarm_createFeed", { name });
+          return summarizeFeed(feed);
+        }));
+        steps.push(await captureStep("write-auto-0", async () => {
+          const write = await writeFeedEntry(context.provider, { name, data: payload0 });
+          assertEqual(write.index, 0, "first auto feed index");
+          return write;
+        }));
+        steps.push(await captureStep("read-latest-after-0", async () => {
+          const read = await readFeedEntry(context.provider, { name });
+          assertEqual(read.index, 0, "latest index after first feed write");
+          assertEqual(decodeFeedText(read), payload0, "latest payload after first feed write");
+          return summarizeDiagnosticFeedRead(read);
+        }));
+        steps.push(await captureStep("read-index-0", async () => {
+          const read = await readFeedEntry(context.provider, { name, index: 0 });
+          assertEqual(read.index, 0, "explicit feed index 0");
+          assertEqual(decodeFeedText(read), payload0, "explicit feed payload 0");
+          return summarizeDiagnosticFeedRead(read);
+        }));
+        steps.push(await captureStep("write-auto-1", async () => {
+          const write = await writeFeedEntry(context.provider, { name, data: payload1 });
+          assertEqual(write.index, 1, "second auto feed index");
+          return write;
+        }));
+        steps.push(await captureStep("read-latest-after-1", async () => {
+          const read = await readFeedEntry(context.provider, { name });
+          assertEqual(read.index, 1, "latest index after second feed write");
+          assertEqual(decodeFeedText(read), payload1, "latest payload after second feed write");
+          return summarizeDiagnosticFeedRead(read);
+        }));
+        steps.push(await captureStep("read-index-1", async () => {
+          const read = await readFeedEntry(context.provider, { name, index: 1 });
+          assertEqual(read.index, 1, "explicit feed index 1");
+          assertEqual(decodeFeedText(read), payload1, "explicit feed payload 1");
+          return summarizeDiagnosticFeedRead(read);
+        }));
+        assertDiagnosticSteps(steps, "Native feed auto-index timeline failed");
+        return {
+          name,
+          feed: feed ? summarizeFeed(feed) : null,
+          steps
+        };
+      }
+    },
+    {
+      id: "diagnostics-feed-sparse-timeline",
+      suite: "diagnostics",
+      label: "Diagnostics: native feed sparse explicit-index timeline",
+      run: async (context) => {
+        const name = feedName(context.runId, "diag-sparse");
+        let feed = null;
+        const payload0 = feedPayload(context.runId, "diag-sparse-0");
+        const payload5 = feedPayload(context.runId, "diag-sparse-5");
+        const duplicatePayload5 = feedPayload(context.runId, "diag-sparse-5-duplicate");
+        const steps = [];
+        steps.push(await captureStep("create-feed", async () => {
+          feed = await callSwarm(context.provider, "swarm_createFeed", { name });
+          return summarizeFeed(feed);
+        }));
+        steps.push(await captureStep("write-index-0", async () => {
+          const write = await writeFeedEntry(context.provider, { name, data: payload0, index: 0 });
+          assertEqual(write.index, 0, "explicit feed write index 0");
+          return write;
+        }));
+        steps.push(await captureStep("write-index-5", async () => {
+          const write = await writeFeedEntry(context.provider, { name, data: payload5, index: 5 });
+          assertEqual(write.index, 5, "explicit feed write index 5");
+          return write;
+        }));
+        steps.push(await captureStep("read-index-0", async () => {
+          const read = await readFeedEntry(context.provider, { name, index: 0 });
+          assertEqual(read.index, 0, "explicit feed read index 0");
+          assertEqual(decodeFeedText(read), payload0, "explicit feed payload 0");
+          return summarizeDiagnosticFeedRead(read);
+        }));
+        steps.push(await captureStep("read-index-5", async () => {
+          const read = await readFeedEntry(context.provider, { name, index: 5 });
+          assertEqual(read.index, 5, "explicit feed read index 5");
+          assertEqual(decodeFeedText(read), payload5, "explicit feed payload 5");
+          return summarizeDiagnosticFeedRead(read);
+        }));
+        steps.push(await captureExpectedReasonStep("duplicate-index-5", async () => writeFeedEntry(context.provider, {
+          name,
+          data: duplicatePayload5,
+          index: 5
+        }), "index_already_exists"));
+        assertDiagnosticSteps(steps, "Native feed sparse timeline failed");
+        return {
+          name,
+          feed: feed ? summarizeFeed(feed) : null,
+          steps
+        };
+      }
+    },
+    {
+      id: "diagnostics-indexed-soc-timeline",
+      suite: "diagnostics",
+      label: "Diagnostics: indexed SOC stream append/read timeline",
+      run: async (context) => {
+        const stream = createDiagnosticIndexedStream(context);
+        const owner = await stream.getOwner();
+        const steps = [];
+        steps.push(await captureStep("append-0", async () => {
+          const appended = await stream.append(({ index, previousReference }) => ({
+            version: 1,
+            type: "swarm-kit:test-center:indexed-soc-entry",
+            index,
+            previousReference,
+            value: "diag-first"
+          }));
+          assertEqual(appended.envelope.index, 0, "diagnostic append index 0");
+          return summarizeIndexedSocEntry(appended);
+        }));
+        steps.push(await captureStep("read-0", async () => {
+          const entry = await stream.readAt(owner, 0);
+          assertCondition(entry !== null, "diagnostic indexed SOC read index 0 returned null");
+          assertEqual(entry.envelope.value, "diag-first", "diagnostic indexed SOC value 0");
+          return summarizeIndexedSocEntry(entry);
+        }));
+        steps.push(await captureStep("append-1", async () => {
+          const appended = await stream.append(({ index, previousReference }) => ({
+            version: 1,
+            type: "swarm-kit:test-center:indexed-soc-entry",
+            index,
+            previousReference,
+            value: "diag-second"
+          }));
+          assertEqual(appended.envelope.index, 1, "diagnostic append index 1");
+          return summarizeIndexedSocEntry(appended);
+        }));
+        steps.push(await captureStep("read-1", async () => {
+          const entry = await stream.readAt(owner, 1);
+          assertCondition(entry !== null, "diagnostic indexed SOC read index 1 returned null");
+          assertEqual(entry.envelope.value, "diag-second", "diagnostic indexed SOC value 1");
+          return summarizeIndexedSocEntry(entry);
+        }));
+        steps.push(await captureStep("append-2", async () => {
+          const appended = await stream.append(({ index, previousReference }) => ({
+            version: 1,
+            type: "swarm-kit:test-center:indexed-soc-entry",
+            index,
+            previousReference,
+            value: "diag-third"
+          }));
+          assertEqual(appended.envelope.index, 2, "diagnostic append index 2");
+          return summarizeIndexedSocEntry(appended);
+        }));
+        steps.push(await captureStep("read-2", async () => {
+          const entry = await stream.readAt(owner, 2);
+          assertCondition(entry !== null, "diagnostic indexed SOC read index 2 returned null");
+          assertEqual(entry.envelope.value, "diag-third", "diagnostic indexed SOC value 2");
+          return summarizeIndexedSocEntry(entry);
+        }));
+        steps.push(await captureStep("read-latest", async () => {
+          const latest = await stream.readLatest(owner, { limit: 3 });
+          assertEqual(latest.map((entry) => entry.envelope.value).join(","), "diag-third,diag-second,diag-first", "diagnostic indexed SOC latest order");
+          return latest.map(summarizeIndexedSocEntry);
+        }));
+        assertDiagnosticSteps(steps, "Indexed SOC timeline failed");
+        return {
+          owner,
+          identifiers: [0, 1, 2].map((index) => ({
+            index,
+            identifier: stream.entryIdentifier(index)
+          })),
+          steps
+        };
+      }
+    },
+    {
+      id: "stress-soc-sequential",
+      suite: "stress",
+      label: "Stress: sequential SOC write/read batch",
+      run: async (context) => {
+        const count = options.stress.socWrites;
+        const writes = [];
+        for (let index = 0; index < count; index += 1) {
+          const identifier = deriveIdentifier(["swarm-kit:test-center:stress:soc", context.runId, index]);
+          const text = `stress soc ${context.runId} ${index}`;
+          const written = await context.kit.soc.writeText(identifier, text);
+          const read = await context.kit.soc.readTextByOwnerAndIdentifier(written.owner, identifier);
+          assertEqual(read, text, `stress SOC ${index}`);
+          writes.push({ index, owner: written.owner, identifier, reference: written.reference });
+        }
+        return { count, writes };
+      }
+    },
+    {
+      id: "stress-feed-concurrent-auto-writes",
+      suite: "stress",
+      label: "Stress: concurrent feed auto-writes get unique indices",
+      run: async (context) => {
+        const name = feedName(context.runId, "stress");
+        const feed = await callSwarm(context.provider, "swarm_createFeed", { name });
+        const count = options.stress.feedWrites;
+        const writes = await Promise.all(Array.from(
+          { length: count },
+          (_, index) => writeFeedEntry(context.provider, {
+            name,
+            data: feedPayload(context.runId, `stress-${index}`)
+          })
+        ));
+        const indices = writes.map((write) => write.index).sort((a, b) => a - b);
+        assertEqual(new Set(indices).size, count, "unique concurrent feed indices");
+        assertEqual(indices[0], 0, "first concurrent feed index");
+        assertEqual(indices[indices.length - 1], count - 1, "last concurrent feed index");
+        const reads = await Promise.all(indices.map((index) => readFeedEntry(context.provider, { name, index })));
+        assertEqual(reads.length, count, "concurrent feed read count");
+        return {
+          name,
+          owner: feed.owner,
+          topic: feed.topic,
+          indices
+        };
+      }
+    }
+  ];
+}
+async function runTestCase(testCase, context) {
+  const started = now2();
+  if (testCase.enabled === false) {
+    return {
+      id: testCase.id,
+      suite: testCase.suite,
+      label: testCase.label,
+      status: "skip",
+      durationMs: elapsed2(started),
+      details: testCase.skipReason ?? "skipped"
+    };
+  }
+  try {
+    const details = await testCase.run(context);
+    if (isWarning(details)) {
+      return {
+        id: testCase.id,
+        suite: testCase.suite,
+        label: testCase.label,
+        status: "warn",
+        durationMs: elapsed2(started),
+        details: details.details
+      };
+    }
+    return {
+      id: testCase.id,
+      suite: testCase.suite,
+      label: testCase.label,
+      status: "pass",
+      durationMs: elapsed2(started),
+      details
+    };
+  } catch (error) {
+    return {
+      id: testCase.id,
+      suite: testCase.suite,
+      label: testCase.label,
+      status: "fail",
+      durationMs: elapsed2(started),
+      error: serializeProviderTestError(error)
+    };
+  }
+}
+async function writeFeedEntry(provider, params) {
+  return callSwarm(provider, "swarm_writeFeedEntry", params);
+}
+async function readFeedEntry(provider, params) {
+  const result = await callSwarm(provider, "swarm_readFeedEntry", params);
+  assertEqual(result.encoding, "base64", "feed entry encoding");
+  assertCondition(Number.isSafeInteger(result.index) && result.index >= 0, "feed entry index must be a non-negative safe integer");
+  assertCondition(
+    result.nextIndex === null || Number.isSafeInteger(result.nextIndex) && result.nextIndex >= 0,
+    "feed entry nextIndex must be null or a non-negative safe integer"
+  );
+  return result;
+}
+async function expectProviderReason2(action, expectedReason) {
+  try {
+    const value = await action();
+    throw new Error(`Expected provider error ${expectedReason}, but call resolved with ${JSON.stringify(summarizeValue2(value))}`);
+  } catch (error) {
+    const reason = getSwarmErrorReason(error);
+    if (reason !== expectedReason) {
+      const serialized = serializeProviderTestError(error);
+      throw new Error(`Expected provider reason "${expectedReason}", received "${reason ?? "none"}": ${serialized.message}`);
+    }
+    return serializeProviderTestError(error);
+  }
+}
+function createTestIndexedStream(context) {
+  return createIndexedSocStream(context.provider, {
+    namespace: "swarm-kit:test-center:indexed-soc:v1",
+    parts: [context.runId],
+    parseEnvelope: (value, readContext) => {
+      if (value.version !== 1 || value.type !== "swarm-kit:test-center:indexed-soc-entry" || value.index !== readContext.index || !(typeof value.previousReference === "string" || value.previousReference === null) || typeof value.value !== "string") {
+        throw new Error("Invalid test-center indexed SOC envelope");
+      }
+      return value;
+    }
+  });
+}
+function createDiagnosticIndexedStream(context) {
+  return createIndexedSocStream(context.provider, {
+    namespace: "swarm-kit:test-center:indexed-soc:v1",
+    parts: [context.runId, "diagnostics"],
+    parseEnvelope: (value, readContext) => {
+      if (value.version !== 1 || value.type !== "swarm-kit:test-center:indexed-soc-entry" || value.index !== readContext.index || !(typeof value.previousReference === "string" || value.previousReference === null) || typeof value.value !== "string") {
+        throw new Error("Invalid diagnostic indexed SOC envelope");
+      }
+      return value;
+    }
+  });
+}
+async function captureStep(name, action) {
+  const started = now2();
+  try {
+    const value = await action();
+    return {
+      name,
+      status: "pass",
+      durationMs: elapsed2(started),
+      value
+    };
+  } catch (error) {
+    return {
+      name,
+      status: "fail",
+      durationMs: elapsed2(started),
+      error: serializeProviderTestError(error)
+    };
+  }
+}
+async function captureExpectedReasonStep(name, action, expectedReason) {
+  return captureStep(name, async () => expectProviderReason2(action, expectedReason));
+}
+function assertDiagnosticSteps(steps, message) {
+  const failed = steps.filter((step) => step.status === "fail");
+  if (failed.length > 0) {
+    throw diagnosticFailure(message, {
+      failed,
+      steps
+    });
+  }
+}
+function diagnosticFailure(message, details) {
+  const error = new Error(message);
+  error.name = "ProviderDiagnosticError";
+  error.details = details;
+  return error;
+}
+function summarizeResults2(results) {
+  return {
+    total: results.length,
+    passed: results.filter((result) => result.status === "pass").length,
+    failed: results.filter((result) => result.status === "fail").length,
+    skipped: results.filter((result) => result.status === "skip").length,
+    warned: results.filter((result) => result.status === "warn").length
+  };
+}
+function summarizeFeed(feed) {
+  return {
+    feedId: feed.feedId,
+    owner: feed.owner,
+    topic: feed.topic,
+    manifestReference: feed.manifestReference,
+    identityMode: feed.identityMode ?? null
+  };
+}
+function summarizeFeedRead(feed, read) {
+  return {
+    name: feed.name,
+    owner: feed.owner,
+    topic: feed.topic,
+    index: read.index,
+    nextIndex: read.nextIndex,
+    text: decodeFeedText(read)
+  };
+}
+function summarizeDiagnosticFeedRead(read) {
+  return {
+    index: read.index,
+    nextIndex: read.nextIndex,
+    text: decodeFeedText(read)
+  };
+}
+function summarizeIndexedSocEntry(entry) {
+  return {
+    owner: entry.owner,
+    identifier: entry.identifier,
+    reference: entry.reference,
+    envelope: entry.envelope
+  };
+}
+function summarizeValue2(value) {
+  if (value === void 0 || value === null) return value;
+  if (typeof value !== "object") return value;
+  const summarized = {};
+  for (const [key, item] of Object.entries(value)) {
+    summarized[key] = typeof item === "string" && item.length > 96 ? `${item.slice(0, 96)}...` : item;
+  }
+  return summarized;
+}
+function serializeProviderTestError(error) {
+  const providerError = error;
+  const serialized = {
+    message: providerError?.message ?? String(error)
+  };
+  if (providerError?.name !== void 0) serialized.name = providerError.name;
+  if (providerError?.code !== void 0) serialized.code = providerError.code;
+  const reason = getSwarmErrorReason(error);
+  if (reason !== void 0) serialized.reason = reason;
+  if (providerError?.data !== void 0) serialized.data = providerError.data;
+  const details = error?.details;
+  if (details !== void 0) serialized.details = details;
+  return serialized;
+}
+function requireCac2(context) {
+  if (!context.cac) throw new Error("CAC suite did not produce a reference");
+  return context.cac;
+}
+function requireSoc2(context) {
+  if (!context.soc) throw new Error("SOC suite did not produce a reference");
+  return context.soc;
+}
+function requireFeed(context) {
+  if (!context.feed) throw new Error("Feed suite did not create a feed");
+  return context.feed;
+}
+function requireFeedWrite(feed, index) {
+  const write = feed.writes.find((item) => item.index === index);
+  if (!write) throw new Error(`Feed write at index ${index} is not available`);
+  return write;
+}
+function decodeFeedText(read) {
+  return bytesToUtf8(base64ToBytes(read.data));
+}
+function payloadOfSize(size2, seed) {
+  if (!Number.isSafeInteger(size2) || size2 < 0) {
+    throw new Error(`Payload size must be a non-negative safe integer: ${size2}`);
+  }
+  if (size2 === 0) return "";
+  const pattern = `${seed}|`;
+  return pattern.repeat(Math.ceil(size2 / pattern.length)).slice(0, size2);
+}
+function feedPayload(runId, label) {
+  return JSON.stringify({
+    type: "swarm-kit:test-center:feed-payload",
+    runId,
+    label
+  });
+}
+function feedName(runId, label) {
+  return `sk-test-${label}-${runId}`.slice(0, 64);
+}
+function missingReference2(runId, tag) {
+  return deriveIdentifier(["swarm-kit:test-center:missing", runId, tag]);
+}
+function createRunId2() {
+  return deriveIdentifier(["swarm-kit:test-center:run", randomBytes4(16)]).slice(0, 16);
+}
+function randomBytes4(length) {
+  const cryptoObject = globalThis.crypto;
+  if (!cryptoObject?.getRandomValues) {
+    throw new Error("crypto.getRandomValues is required");
+  }
+  const bytes = new Uint8Array(length);
+  cryptoObject.getRandomValues(bytes);
+  return bytes;
+}
+function assertOwner2(owner) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(owner)) {
+    throw new Error(`Invalid owner: ${owner}`);
+  }
+}
+function assertHex2(value, bytes, label) {
+  const normalized = value.replace(/^0x/, "");
+  if (normalized.length !== bytes * 2 || !/^[0-9a-fA-F]+$/.test(normalized)) {
+    throw new Error(`${label} must be ${bytes * 2} hex characters`);
+  }
+}
+function assertSameLower2(actual, expected, label) {
+  if (actual.toLowerCase() !== expected.toLowerCase()) {
+    throw new Error(`${label} mismatch: expected ${expected}, received ${actual}`);
+  }
+}
+function assertEqual(actual, expected, label) {
+  if (actual !== expected) {
+    throw new Error(`${label} mismatch: expected ${String(expected)}, received ${String(actual)}`);
+  }
+}
+function assertCondition(condition, message) {
+  if (!condition) throw new Error(message);
+}
+function isWarning(value) {
+  return Boolean(value && typeof value === "object" && value.warning === true);
+}
+function now2() {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+function elapsed2(started) {
+  return Math.max(0, Math.round((now2() - started) * 10) / 10);
+}
+function sleep2(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 export {
   SwarmKitError,
   assertHex,
@@ -6221,6 +7438,7 @@ export {
   readSocTextByOwnerAndIdentifier,
   readText,
   runSwarmProviderCompliance,
+  runSwarmProviderTestCenter,
   signDocument,
   signedDocumentPayloadBytes,
   toSwarmKitDriver,

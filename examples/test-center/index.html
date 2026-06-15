@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Swarm Provider Test Center</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --surface: #ffffff;
+      --surface-soft: #eef2f6;
+      --border: #d7dee7;
+      --text: #14202c;
+      --muted: #667486;
+      --accent: #0f766e;
+      --accent-dark: #115e59;
+      --pass: #047857;
+      --fail: #b91c1c;
+      --skip: #805f00;
+      --warn: #b45309;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button {
+      border: 0;
+      border-radius: 7px;
+      padding: 10px 13px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.52;
+    }
+
+    label {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--accent);
+    }
+
+    .primary {
+      color: white;
+      background: var(--accent);
+    }
+
+    .primary:hover:not(:disabled) { background: var(--accent-dark); }
+
+    .secondary {
+      color: var(--text);
+      background: var(--surface-soft);
+      border: 1px solid var(--border);
+    }
+
+    .app {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    h1, h2, p { margin: 0; }
+
+    h1 { font-size: 28px; }
+    h2 { font-size: 15px; }
+
+    .muted {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 3px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .status {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .tile {
+      min-height: 82px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 12px;
+    }
+
+    .tile strong {
+      display: block;
+      font-size: 24px;
+      line-height: 1.2;
+    }
+
+    .tile span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(360px, 0.55fr);
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 14px;
+    }
+
+    .suite-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      margin-top: 10px;
+    }
+
+    .panel pre,
+    .result pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .results {
+      display: grid;
+      gap: 8px;
+    }
+
+    .result {
+      border: 1px solid var(--border);
+      border-left-width: 5px;
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 12px;
+    }
+
+    .result.pass { border-left-color: var(--pass); }
+    .result.fail { border-left-color: var(--fail); }
+    .result.skip { border-left-color: var(--skip); }
+    .result.warn { border-left-color: var(--warn); }
+
+    .result-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .result-title {
+      min-width: 0;
+    }
+
+    .result-title .suite {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .badge {
+      min-width: 54px;
+      text-align: center;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .badge.pass { color: var(--pass); background: #d1fae5; }
+    .badge.fail { color: var(--fail); background: #fee2e2; }
+    .badge.skip { color: var(--skip); background: #fef3c7; }
+    .badge.warn { color: var(--warn); background: #ffedd5; }
+
+    .empty {
+      min-height: 240px;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+    }
+
+    .report-panel {
+      margin-top: 14px;
+    }
+
+    #report-json {
+      display: block;
+      width: 100%;
+      min-height: 240px;
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fbfcfe;
+      color: var(--text);
+      padding: 10px;
+      resize: vertical;
+      font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    @media (max-width: 900px) {
+      .app { padding: 16px; }
+      .topbar,
+      .grid {
+        grid-template-columns: 1fr;
+        display: grid;
+      }
+      .actions { justify-content: start; }
+      .status { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <h1>Provider Test Center</h1>
+        <p class="muted">Black-box diagnostics for Freedom Browser Swarm providers</p>
+      </div>
+      <div class="actions">
+        <button id="detect" class="secondary" type="button">Detect</button>
+        <button id="connect" class="secondary" type="button">Connect</button>
+        <button id="run" class="primary" type="button">Run</button>
+        <button id="copy" class="secondary" type="button" disabled>Copy JSON</button>
+        <button id="download" class="secondary" type="button" disabled>Download</button>
+      </div>
+    </header>
+
+    <section class="status" aria-label="Test summary">
+      <div class="tile">
+        <strong id="passed">0</strong>
+        <span>Passed</span>
+      </div>
+      <div class="tile">
+        <strong id="failed">0</strong>
+        <span>Failed</span>
+      </div>
+      <div class="tile">
+        <strong id="warned">0</strong>
+        <span>Warnings</span>
+      </div>
+      <div class="tile">
+        <strong id="skipped">0</strong>
+        <span>Skipped</span>
+      </div>
+      <div class="tile">
+        <strong id="total">0</strong>
+        <span>Total</span>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>Suites</h2>
+        <div class="suite-grid">
+          <label><input type="checkbox" name="suite" value="bootstrap" checked>Bootstrap</label>
+          <label><input type="checkbox" name="suite" value="cac" checked>CAC</label>
+          <label><input type="checkbox" name="suite" value="soc" checked>SOC</label>
+          <label><input type="checkbox" name="suite" value="feed" checked>Feeds</label>
+          <label><input type="checkbox" name="suite" value="indexed-soc" checked>Indexed SOC</label>
+          <label><input type="checkbox" name="suite" value="primitives" checked>Primitives</label>
+          <label><input type="checkbox" name="suite" value="diagnostics" checked>Diagnostics</label>
+          <label><input type="checkbox" name="suite" value="stress">Stress</label>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Provider</h2>
+        <pre id="provider-state">Waiting for window.swarm...</pre>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>Run</h2>
+        <pre id="run-state">No run yet</pre>
+      </div>
+      <div class="panel">
+        <h2>Failure Summary</h2>
+        <pre id="failure-state">-</pre>
+      </div>
+    </section>
+
+    <section id="results" class="results">
+      <div class="panel empty">Run selected suites to see results</div>
+    </section>
+
+    <section class="panel report-panel">
+      <h2>Report JSON</h2>
+      <textarea id="report-json" readonly spellcheck="false"></textarea>
+    </section>
+  </main>
+
+  <script type="module">
+    import {
+      callSwarm,
+      runSwarmProviderTestCenter,
+      waitForSwarm
+    } from './swarm-kit.js';
+
+    const state = {
+      provider: null,
+      report: null
+    };
+
+    const $ = id => document.getElementById(id);
+
+    $('detect').onclick = () => detectProvider();
+    $('connect').onclick = () => runUiAction(connectProvider);
+    $('run').onclick = () => runUiAction(runTests);
+    $('copy').onclick = () => runUiAction(copyReport);
+    $('download').onclick = () => downloadReport();
+
+    detectProvider();
+
+    async function detectProvider() {
+      setProviderState('Waiting for window.swarm...');
+      try {
+        state.provider = await waitForSwarm({
+          requireFreedomBrowser: true,
+          timeoutMs: 10000
+        });
+        setProviderState({
+          detected: true,
+          isFreedomBrowser: state.provider.isFreedomBrowser === true,
+          origin: location.origin
+        });
+      } catch (error) {
+        state.provider = null;
+        setProviderState({
+          detected: false,
+          error: formatError(error)
+        });
+      }
+    }
+
+    async function connectProvider() {
+      const provider = await ensureProvider();
+      const result = await callSwarm(provider, 'swarm_requestAccess');
+      setProviderState({
+        connected: true,
+        result
+      });
+    }
+
+    async function runTests() {
+      const provider = await ensureProvider();
+      const suites = selectedSuites();
+      if (suites.length === 0) {
+        throw new Error('Select at least one suite');
+      }
+
+      setBusy(true);
+      setRunState({
+        status: 'running',
+        suites
+      });
+      try {
+        const report = await runSwarmProviderTestCenter(provider, { suites });
+        state.report = {
+          ...report,
+          environment: {
+            origin: location.origin,
+            userAgent: navigator.userAgent,
+            isFreedomBrowser: provider.isFreedomBrowser === true
+          }
+        };
+        renderReport(state.report);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function copyReport() {
+      if (!state.report) return;
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(state.report, null, 2));
+        setRunState({
+          copied: true,
+          finishedAt: state.report.finishedAt,
+          summary: state.report.summary
+        });
+      } catch (error) {
+        selectReportJson();
+        setRunState({
+          copied: false,
+          fallback: 'report-json-selected',
+          error: formatError(error),
+          summary: state.report.summary
+        });
+      }
+    }
+
+    function downloadReport() {
+      if (!state.report) return;
+      const blob = new Blob([JSON.stringify(state.report, null, 2)], {
+        type: 'application/json'
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `swarm-provider-test-center-${state.report.runId}.json`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    async function ensureProvider() {
+      if (state.provider) return state.provider;
+      await detectProvider();
+      if (!state.provider) throw new Error('window.swarm provider is not available');
+      return state.provider;
+    }
+
+    async function runUiAction(action) {
+      try {
+        await action();
+      } catch (error) {
+        setRunState({
+          error: formatError(error)
+        });
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function selectedSuites() {
+      return Array.from(document.querySelectorAll('input[name="suite"]:checked'))
+        .map(input => input.value);
+    }
+
+    function renderReport(report) {
+      const summary = report.summary;
+      $('passed').textContent = String(summary.passed);
+      $('failed').textContent = String(summary.failed);
+      $('warned').textContent = String(summary.warned);
+      $('skipped').textContent = String(summary.skipped);
+      $('total').textContent = String(summary.total);
+      $('copy').disabled = false;
+      $('download').disabled = false;
+      $('report-json').value = JSON.stringify(report, null, 2);
+      setRunState({
+        runId: report.runId,
+        selectedSuites: report.selectedSuites,
+        startedAt: report.startedAt,
+        finishedAt: report.finishedAt,
+        summary
+      });
+      renderFailureSummary(report);
+
+      const results = $('results');
+      results.textContent = '';
+      for (const item of report.results) {
+        results.append(renderResult(item));
+      }
+    }
+
+    function renderFailureSummary(report) {
+      const notable = report.results.filter(item => item.status === 'fail' || item.status === 'warn');
+      if (notable.length === 0) {
+        $('failure-state').textContent = 'No failures or warnings';
+        return;
+      }
+      $('failure-state').textContent = JSON.stringify(notable.map(item => ({
+        id: item.id,
+        suite: item.suite,
+        status: item.status,
+        message: item.error?.message,
+        reason: item.error?.reason,
+        details: item.details
+      })), null, 2);
+    }
+
+    function renderResult(item) {
+      const article = document.createElement('article');
+      article.className = `result ${item.status}`;
+
+      const header = document.createElement('div');
+      header.className = 'result-header';
+
+      const titleWrap = document.createElement('div');
+      titleWrap.className = 'result-title';
+
+      const suite = document.createElement('div');
+      suite.className = 'suite';
+      suite.textContent = item.suite;
+      titleWrap.append(suite);
+
+      const title = document.createElement('h2');
+      title.textContent = item.label;
+      titleWrap.append(title);
+      header.append(titleWrap);
+
+      const badge = document.createElement('span');
+      badge.className = `badge ${item.status}`;
+      badge.textContent = item.status;
+      header.append(badge);
+
+      const body = document.createElement('pre');
+      body.textContent = JSON.stringify({
+        id: item.id,
+        durationMs: item.durationMs,
+        details: item.details,
+        error: item.error
+      }, null, 2);
+
+      article.append(header, body);
+      return article;
+    }
+
+    function selectReportJson() {
+      const report = $('report-json');
+      report.focus();
+      report.select();
+    }
+
+    function setProviderState(value) {
+      $('provider-state').textContent = typeof value === 'string'
+        ? value
+        : JSON.stringify(value, null, 2);
+    }
+
+    function setRunState(value) {
+      $('run-state').textContent = typeof value === 'string'
+        ? value
+        : JSON.stringify(value, null, 2);
+    }
+
+    function setBusy(busy) {
+      $('run').disabled = busy;
+      $('connect').disabled = busy;
+      $('detect').disabled = busy;
+      $('download').disabled = busy || !state.report;
+      $('copy').disabled = busy || !state.report;
+    }
+
+    function formatError(error) {
+      return {
+        message: error?.message ?? String(error),
+        code: error?.code,
+        reason: error?.data?.reason,
+        data: error?.data
+      };
+    }
+  </script>
+</body>
+</html>

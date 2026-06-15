@@ -1,0 +1,993 @@
+{
+  "runId": "d3eea163fe5784ac",
+  "startedAt": "2026-06-15T13:58:36.404Z",
+  "finishedAt": "2026-06-15T14:00:18.010Z",
+  "selectedSuites": [
+    "bootstrap",
+    "cac",
+    "soc",
+    "feed",
+    "indexed-soc",
+    "primitives",
+    "diagnostics"
+  ],
+  "summary": {
+    "total": 34,
+    "passed": 34,
+    "failed": 0,
+    "skipped": 0,
+    "warned": 0
+  },
+  "results": [
+    {
+      "id": "bootstrap-request-access",
+      "suite": "bootstrap",
+      "label": "requestAccess resolves",
+      "status": "pass",
+      "durationMs": 3.9,
+      "details": {
+        "connected": true,
+        "origin": "http://127.0.0.1:4176",
+        "capabilities": [
+          "publish"
+        ]
+      }
+    },
+    {
+      "id": "bootstrap-capabilities",
+      "suite": "bootstrap",
+      "label": "getCapabilities exposes limits",
+      "status": "pass",
+      "durationMs": 5.7,
+      "details": {
+        "specVersion": "1.0",
+        "canPublish": true,
+        "reason": null,
+        "limits": {
+          "maxDataBytes": 10485760,
+          "maxFilesBytes": 52428800,
+          "maxFileCount": 100,
+          "maxPathBytes": 100,
+          "maxChunkPayloadBytes": 4096
+        }
+      }
+    },
+    {
+      "id": "bootstrap-signing-identity",
+      "suite": "bootstrap",
+      "label": "getSigningIdentity returns stable owner",
+      "status": "pass",
+      "durationMs": 34.8,
+      "details": {
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "identityMode": "app-scoped"
+      }
+    },
+    {
+      "id": "cac-small-roundtrip",
+      "suite": "cac",
+      "label": "CAC small byte roundtrip",
+      "status": "pass",
+      "durationMs": 229.9,
+      "details": {
+        "reference": "e241e49f9f3343a621cd96940c7ab7b1cf572a10ad310115e49f270ac01a6ae9",
+        "bytes": 42
+      }
+    },
+    {
+      "id": "cac-4096-roundtrip",
+      "suite": "cac",
+      "label": "CAC 4096-byte roundtrip",
+      "status": "pass",
+      "durationMs": 74.8,
+      "details": {
+        "reference": "c0d587289768cb8e1fa2e60330c2fe8aed6406fb6a127b76ed5a024c3a42a4ca",
+        "bytes": 4096
+      }
+    },
+    {
+      "id": "cac-missing",
+      "suite": "cac",
+      "label": "Missing CAC returns chunk_not_found",
+      "status": "pass",
+      "durationMs": 2020.2,
+      "details": {
+        "message": "Chunk not found: 6d52070536a067cc99c0d23bce7461cda0c25ad316305fbd27dd5049ab7be489",
+        "name": "Error",
+        "code": -32602,
+        "reason": "chunk_not_found",
+        "data": {
+          "reason": "chunk_not_found"
+        }
+      }
+    },
+    {
+      "id": "soc-roundtrip-address",
+      "suite": "soc",
+      "label": "SOC write/read by address",
+      "status": "pass",
+      "durationMs": 199.7,
+      "details": {
+        "reference": "e597691821cd7be7d3299ff33bff530f4ee4e26c9755f51fe4c6b3f7bbe52252",
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "identifier": "bb07e877c3ae04a840f9d924fd0850740742d9681860c95984a6187bd4a139bb"
+      }
+    },
+    {
+      "id": "soc-roundtrip-owner-identifier",
+      "suite": "soc",
+      "label": "SOC read by owner and identifier",
+      "status": "pass",
+      "durationMs": 26.9,
+      "details": {
+        "reference": "e597691821cd7be7d3299ff33bff530f4ee4e26c9755f51fe4c6b3f7bbe52252",
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "identifier": "bb07e877c3ae04a840f9d924fd0850740742d9681860c95984a6187bd4a139bb"
+      }
+    },
+    {
+      "id": "soc-missing-owner-identifier",
+      "suite": "soc",
+      "label": "Missing SOC by owner+identifier returns chunk_not_found",
+      "status": "pass",
+      "durationMs": 2012.6,
+      "details": {
+        "message": "Single Owner Chunk not found",
+        "name": "Error",
+        "code": -32602,
+        "reason": "chunk_not_found",
+        "data": {
+          "reason": "chunk_not_found"
+        }
+      }
+    },
+    {
+      "id": "soc-missing-address",
+      "suite": "soc",
+      "label": "Missing SOC by address returns chunk_not_found",
+      "status": "pass",
+      "durationMs": 1986.6,
+      "details": {
+        "message": "Single Owner Chunk not found",
+        "name": "Error",
+        "code": -32602,
+        "reason": "chunk_not_found",
+        "data": {
+          "reason": "chunk_not_found"
+        }
+      }
+    },
+    {
+      "id": "soc-cac-type-mismatch",
+      "suite": "soc",
+      "label": "CAC read as SOC returns chunk_type_mismatch",
+      "status": "pass",
+      "durationMs": 4.9,
+      "details": {
+        "message": "Downloaded bytes do not validate as the requested Single Owner Chunk",
+        "name": "Error",
+        "code": -32602,
+        "reason": "chunk_type_mismatch",
+        "data": {
+          "reason": "chunk_type_mismatch"
+        }
+      }
+    },
+    {
+      "id": "soc-as-cac-type-mismatch",
+      "suite": "soc",
+      "label": "SOC read as CAC returns chunk_type_mismatch",
+      "status": "pass",
+      "durationMs": 3.4,
+      "details": {
+        "message": "Downloaded bytes do not validate as the requested content-addressed chunk",
+        "name": "Error",
+        "code": -32602,
+        "reason": "chunk_type_mismatch",
+        "data": {
+          "reason": "chunk_type_mismatch"
+        }
+      }
+    },
+    {
+      "id": "feed-create",
+      "suite": "feed",
+      "label": "createFeed returns feed coordinates",
+      "status": "pass",
+      "durationMs": 16.5,
+      "details": {
+        "feedId": "sk-test-journal-d3eea163fe5784ac",
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "topic": "885246df51f7be6a3c8e603f7315abda416a12c4e89334c02c4778f5d50b38d9",
+        "manifestReference": "7fbc9dd6e07b9564b348c2b016a0bd6f1cfffcd45bec6ea397e5acf241331413",
+        "identityMode": "app-scoped"
+      }
+    },
+    {
+      "id": "feed-auto-index-0",
+      "suite": "feed",
+      "label": "writeFeedEntry auto-writes index 0",
+      "status": "pass",
+      "durationMs": 1131.3,
+      "details": {
+        "name": "sk-test-journal-d3eea163fe5784ac",
+        "index": 0,
+        "bytes": 89
+      }
+    },
+    {
+      "id": "feed-read-index-0-name",
+      "suite": "feed",
+      "label": "readFeedEntry reads exact index 0 by name",
+      "status": "pass",
+      "durationMs": 141,
+      "details": {
+        "name": "sk-test-journal-d3eea163fe5784ac",
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "topic": "885246df51f7be6a3c8e603f7315abda416a12c4e89334c02c4778f5d50b38d9",
+        "index": 0,
+        "nextIndex": 1,
+        "text": "{\"type\":\"swarm-kit:test-center:feed-payload\",\"runId\":\"d3eea163fe5784ac\",\"label\":\"auto-0\"}"
+      }
+    },
+    {
+      "id": "feed-auto-index-1-latest",
+      "suite": "feed",
+      "label": "readFeedEntry latest returns highest index and nextIndex",
+      "status": "pass",
+      "durationMs": 7304,
+      "details": {
+        "name": "sk-test-journal-d3eea163fe5784ac",
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "topic": "885246df51f7be6a3c8e603f7315abda416a12c4e89334c02c4778f5d50b38d9",
+        "index": 1,
+        "nextIndex": 2,
+        "text": "{\"type\":\"swarm-kit:test-center:feed-payload\",\"runId\":\"d3eea163fe5784ac\",\"label\":\"auto-1\"}"
+      }
+    },
+    {
+      "id": "feed-sparse-index-write-read",
+      "suite": "feed",
+      "label": "Sparse explicit feed index uses exact-match semantics",
+      "status": "pass",
+      "durationMs": 2814.3,
+      "details": {
+        "name": "sk-test-journal-d3eea163fe5784ac",
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "topic": "885246df51f7be6a3c8e603f7315abda416a12c4e89334c02c4778f5d50b38d9",
+        "index": 5,
+        "nextIndex": 6,
+        "text": "{\"type\":\"swarm-kit:test-center:feed-payload\",\"runId\":\"d3eea163fe5784ac\",\"label\":\"sparse-5\"}"
+      }
+    },
+    {
+      "id": "feed-missing-index-exact",
+      "suite": "feed",
+      "label": "Missing explicit feed index returns entry_not_found",
+      "status": "pass",
+      "durationMs": 1884.3,
+      "details": {
+        "message": "Feed entry not found at index 4",
+        "name": "Error",
+        "code": -32602,
+        "reason": "entry_not_found",
+        "data": {
+          "reason": "entry_not_found"
+        }
+      }
+    },
+    {
+      "id": "feed-overwrite-protection",
+      "suite": "feed",
+      "label": "Occupied explicit feed index returns index_already_exists",
+      "status": "pass",
+      "durationMs": 61.2,
+      "details": {
+        "message": "Feed entry already exists at index 5",
+        "name": "Error",
+        "code": -32602,
+        "reason": "index_already_exists",
+        "data": {
+          "reason": "index_already_exists"
+        }
+      }
+    },
+    {
+      "id": "feed-read-topic-owner",
+      "suite": "feed",
+      "label": "readFeedEntry reads by raw topic and owner",
+      "status": "pass",
+      "durationMs": 25.4,
+      "details": {
+        "name": "sk-test-journal-d3eea163fe5784ac",
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "topic": "885246df51f7be6a3c8e603f7315abda416a12c4e89334c02c4778f5d50b38d9",
+        "index": 0,
+        "nextIndex": 1,
+        "text": "{\"type\":\"swarm-kit:test-center:feed-payload\",\"runId\":\"d3eea163fe5784ac\",\"label\":\"auto-0\"}"
+      }
+    },
+    {
+      "id": "feed-list-includes-created-feed",
+      "suite": "feed",
+      "label": "listFeeds includes created feed",
+      "status": "pass",
+      "durationMs": 0.5,
+      "details": {
+        "count": 6,
+        "match": {
+          "name": "sk-test-journal-d3eea163fe5784ac",
+          "topic": "885246df51f7be6a3c8e603f7315abda416a12c4e89334c02c4778f5d50b38d9",
+          "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+          "manifestReference": "7fbc9dd6e07b9564b348c2b016a0bd6f1cfffcd45bec6ea397e5acf241331413",
+          "bzzUrl": "bzz://7fbc9dd6e07b9564b348c2b016a0bd6f1cfffcd45bec6ea397e5acf241331413",
+          "createdAt": 1781531923024,
+          "lastUpdated": null,
+          "lastReference": null
+        }
+      }
+    },
+    {
+      "id": "indexed-soc-append-read",
+      "suite": "indexed-soc",
+      "label": "Indexed SOC stream appends and discovers latest",
+      "status": "pass",
+      "durationMs": 17544.9,
+      "details": {
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "latestIndex": 2,
+        "references": [
+          "bbe1746ca0101cca35f767158a084c229914a9feb828d868ac4e2b3a8d656811",
+          "8d459ce3ce7b7977f38f3278785f5677fe9a20bf5f4b40e5663840a5f0866973",
+          "456237b28acc5d1d4c6ad22c9f50bcb17274a8d58b7ce52d271dcbc20f1eafd6"
+        ]
+      }
+    },
+    {
+      "id": "indexed-soc-missing-next",
+      "suite": "indexed-soc",
+      "label": "Indexed SOC missing next index returns null",
+      "status": "pass",
+      "durationMs": 2255,
+      "details": {
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "missingIndex": 3
+      }
+    },
+    {
+      "id": "primitive-object-graph",
+      "suite": "primitives",
+      "label": "Object graph stores payload above one raw chunk",
+      "status": "pass",
+      "durationMs": 734.8,
+      "details": {
+        "reference": "5f5c199b03de2cf6e13c6366566d2b6c3931aa2d4ef271a437fd4bbb18be51e3",
+        "size": 6446,
+        "chunkCount": 2,
+        "nodeCount": 1
+      }
+    },
+    {
+      "id": "primitive-epoch-feed",
+      "suite": "primitives",
+      "label": "Epoch feed write/readLatest",
+      "status": "pass",
+      "durationMs": 218.6,
+      "details": {
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "reference": "2e7e7ed61fcc4287171e626f66233a52ce54c4adfb44da056459d27f79afd77e",
+        "identifier": "4e9a915509d66aa1896315e94e71f4954b8b00a470d90ec55a1c28e4ff43b3f4",
+        "epochStartMs": 1781531940000
+      }
+    },
+    {
+      "id": "primitive-hash-chain",
+      "suite": "primitives",
+      "label": "Hash chain appends and walks previous references",
+      "status": "pass",
+      "durationMs": 7466,
+      "details": {
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "latest": [
+          {
+            "index": 1,
+            "reference": "04c8cc41b20b5059e98958bf2cab90f4e0e0885e70005fd8272a40c3c4f95538"
+          },
+          {
+            "index": 0,
+            "reference": "6f935d72e5f4977cdcced1b30908818c23ba9aeff9b4f1458f35309c624b9735"
+          }
+        ]
+      }
+    },
+    {
+      "id": "primitive-multi-writer-feed",
+      "suite": "primitives",
+      "label": "Multi-writer feed single-writer stream works",
+      "status": "pass",
+      "durationMs": 7317.6,
+      "details": {
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "entries": [
+          {
+            "index": 1,
+            "reference": "6ac26beb13b71c61aab66c8519cfb6210f32f8b10513cde07b7a8a1087179e7d"
+          },
+          {
+            "index": 0,
+            "reference": "566859dda31afae1f6707d1d14f31a95df0af5a01226a926cd22bada4e075759"
+          }
+        ]
+      }
+    },
+    {
+      "id": "primitive-keyed-lookup",
+      "suite": "primitives",
+      "label": "Keyed lookup writes and reads latest value",
+      "status": "pass",
+      "durationMs": 7403.6,
+      "details": {
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "latest": {
+          "index": 1,
+          "reference": "1a851ed56aca29bbf7c40574fa992034711a213f01036f6d93daca68d74852a0"
+        }
+      }
+    },
+    {
+      "id": "primitive-commit-reveal",
+      "suite": "primitives",
+      "label": "Commit-reveal commit/read/reveal/readPair",
+      "status": "pass",
+      "durationMs": 878.3,
+      "details": {
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "commitReference": "24e4ac57c453e0963b2a1834f4b7509d9dff34997444bd34a8e93c16595775da",
+        "revealReference": "469e85457b6558b9752e1e200f4f1670a12eeabfbd07e94f52eda26dbeebc8a1",
+        "verified": true
+      }
+    },
+    {
+      "id": "diagnostics-cac-size-matrix",
+      "suite": "diagnostics",
+      "label": "Diagnostics: CAC size matrix immediate read-after-write",
+      "status": "pass",
+      "durationMs": 2021.9,
+      "details": {
+        "sizes": [
+          1,
+          31,
+          32,
+          33,
+          42,
+          100,
+          1000,
+          4095,
+          4096,
+          4097,
+          8192
+        ],
+        "steps": [
+          {
+            "name": "cac-size-1",
+            "status": "pass",
+            "durationMs": 62.1,
+            "value": {
+              "size": 1,
+              "reference": "b5ac9f9f8b0f3bb412da189c65e37cc6cfaf4c2853b5c0f2a2e329e1a12593fb"
+            }
+          },
+          {
+            "name": "cac-size-31",
+            "status": "pass",
+            "durationMs": 275.5,
+            "value": {
+              "size": 31,
+              "reference": "ce2966c7b5c503ca0a833b4a89220b13fbed17b7c8cb396972c55d563696e573"
+            }
+          },
+          {
+            "name": "cac-size-32",
+            "status": "pass",
+            "durationMs": 129.7,
+            "value": {
+              "size": 32,
+              "reference": "d099be3740dea4a3557f8df3362cb37d1410e8af7deec1bb16b74d57e016f78b"
+            }
+          },
+          {
+            "name": "cac-size-33",
+            "status": "pass",
+            "durationMs": 147.6,
+            "value": {
+              "size": 33,
+              "reference": "9c57b1e9be3775deca5b0182faf6713aabed8bbf23ca7b111f45048cee2a8fa6"
+            }
+          },
+          {
+            "name": "cac-size-42",
+            "status": "pass",
+            "durationMs": 282.6,
+            "value": {
+              "size": 42,
+              "reference": "5676238b722936c3f8fbb011c8ac0833025e98e9b9fb7f4af508e2367ec6db79"
+            }
+          },
+          {
+            "name": "cac-size-100",
+            "status": "pass",
+            "durationMs": 162.8,
+            "value": {
+              "size": 100,
+              "reference": "0a5be7bdb5fb13b377699bddc517ee1cfbbcc105bcb6cce27de50a2335f1f968"
+            }
+          },
+          {
+            "name": "cac-size-1000",
+            "status": "pass",
+            "durationMs": 334.8,
+            "value": {
+              "size": 1000,
+              "reference": "0844aeb8c7a3545efd3a84f2e83a235b295410d872599bb71ce64b5003c222d9"
+            }
+          },
+          {
+            "name": "cac-size-4095",
+            "status": "pass",
+            "durationMs": 180.2,
+            "value": {
+              "size": 4095,
+              "reference": "6cfbbc2929f7c874896734907b3f12b3c2ee3c311c89dfa63c8775d568901417"
+            }
+          },
+          {
+            "name": "cac-size-4096",
+            "status": "pass",
+            "durationMs": 441.7,
+            "value": {
+              "size": 4096,
+              "reference": "c24accd2d7bad8201fa8ec26a4588725243000a8387fca8817eff08bafb7210b"
+            }
+          },
+          {
+            "name": "cac-size-4097",
+            "status": "pass",
+            "durationMs": 2.6,
+            "value": {
+              "size": 4097,
+              "expectedRejection": true,
+              "error": {
+                "message": "Payload exceeds maximum chunk size of 4096 bytes",
+                "name": "Error",
+                "code": -32602,
+                "reason": "payload_too_large",
+                "data": {
+                  "reason": "payload_too_large",
+                  "limit": 4096,
+                  "actual": 4097
+                }
+              }
+            }
+          },
+          {
+            "name": "cac-size-8192",
+            "status": "pass",
+            "durationMs": 2.2,
+            "value": {
+              "size": 8192,
+              "expectedRejection": true,
+              "error": {
+                "message": "Payload exceeds maximum chunk size of 4096 bytes",
+                "name": "Error",
+                "code": -32602,
+                "reason": "payload_too_large",
+                "data": {
+                  "reason": "payload_too_large",
+                  "limit": 4096,
+                  "actual": 8192
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "diagnostics-cac-delayed-small-read",
+      "suite": "diagnostics",
+      "label": "Diagnostics: CAC small chunk delayed read-after-write",
+      "status": "pass",
+      "durationMs": 4392.1,
+      "details": {
+        "size": 42,
+        "reference": "ea15bd5d90806abaa7a2542d8ae02a2d2bb5cdbdc13470a2ad613f4abaa36372",
+        "steps": [
+          {
+            "name": "read-after-0ms",
+            "status": "pass",
+            "durationMs": 59.9,
+            "value": {
+              "delayMs": 0,
+              "reference": "ea15bd5d90806abaa7a2542d8ae02a2d2bb5cdbdc13470a2ad613f4abaa36372",
+              "size": 42
+            }
+          },
+          {
+            "name": "read-after-250ms",
+            "status": "pass",
+            "durationMs": 255.3,
+            "value": {
+              "delayMs": 250,
+              "reference": "ea15bd5d90806abaa7a2542d8ae02a2d2bb5cdbdc13470a2ad613f4abaa36372",
+              "size": 42
+            }
+          },
+          {
+            "name": "read-after-1000ms",
+            "status": "pass",
+            "durationMs": 1007.5,
+            "value": {
+              "delayMs": 1000,
+              "reference": "ea15bd5d90806abaa7a2542d8ae02a2d2bb5cdbdc13470a2ad613f4abaa36372",
+              "size": 42
+            }
+          },
+          {
+            "name": "read-after-3000ms",
+            "status": "pass",
+            "durationMs": 3007,
+            "value": {
+              "delayMs": 3000,
+              "reference": "ea15bd5d90806abaa7a2542d8ae02a2d2bb5cdbdc13470a2ad613f4abaa36372",
+              "size": 42
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "diagnostics-feed-auto-timeline",
+      "suite": "diagnostics",
+      "label": "Diagnostics: native feed auto-index timeline",
+      "status": "pass",
+      "durationMs": 13141.6,
+      "details": {
+        "name": "sk-test-diag-auto-d3eea163fe5784ac",
+        "feed": {
+          "feedId": "sk-test-diag-auto-d3eea163fe5784ac",
+          "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+          "topic": "589a1d1e91b610613bbe138515f5f1feaedd6060ae86869251420f76e054f438",
+          "manifestReference": "392c82e3f0dd9d9824c2c1b48b33cb6e42da55bec36e2d61fc5f86bb78762ed9",
+          "identityMode": "app-scoped"
+        },
+        "steps": [
+          {
+            "name": "create-feed",
+            "status": "pass",
+            "durationMs": 26.6,
+            "value": {
+              "feedId": "sk-test-diag-auto-d3eea163fe5784ac",
+              "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+              "topic": "589a1d1e91b610613bbe138515f5f1feaedd6060ae86869251420f76e054f438",
+              "manifestReference": "392c82e3f0dd9d9824c2c1b48b33cb6e42da55bec36e2d61fc5f86bb78762ed9",
+              "identityMode": "app-scoped"
+            }
+          },
+          {
+            "name": "write-auto-0",
+            "status": "pass",
+            "durationMs": 2312.3,
+            "value": {
+              "index": 0
+            }
+          },
+          {
+            "name": "read-latest-after-0",
+            "status": "pass",
+            "durationMs": 3173.4,
+            "value": {
+              "index": 0,
+              "nextIndex": 1,
+              "text": "{\"type\":\"swarm-kit:test-center:feed-payload\",\"runId\":\"d3eea163fe5784ac\",\"label\":\"diag-auto-0\"}"
+            }
+          },
+          {
+            "name": "read-index-0",
+            "status": "pass",
+            "durationMs": 35.4,
+            "value": {
+              "index": 0,
+              "nextIndex": 1,
+              "text": "{\"type\":\"swarm-kit:test-center:feed-payload\",\"runId\":\"d3eea163fe5784ac\",\"label\":\"diag-auto-0\"}"
+            }
+          },
+          {
+            "name": "write-auto-1",
+            "status": "pass",
+            "durationMs": 3592.7,
+            "value": {
+              "index": 1
+            }
+          },
+          {
+            "name": "read-latest-after-1",
+            "status": "pass",
+            "durationMs": 3957.3,
+            "value": {
+              "index": 1,
+              "nextIndex": 2,
+              "text": "{\"type\":\"swarm-kit:test-center:feed-payload\",\"runId\":\"d3eea163fe5784ac\",\"label\":\"diag-auto-1\"}"
+            }
+          },
+          {
+            "name": "read-index-1",
+            "status": "pass",
+            "durationMs": 43.8,
+            "value": {
+              "index": 1,
+              "nextIndex": 2,
+              "text": "{\"type\":\"swarm-kit:test-center:feed-payload\",\"runId\":\"d3eea163fe5784ac\",\"label\":\"diag-auto-1\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "diagnostics-feed-sparse-timeline",
+      "suite": "diagnostics",
+      "label": "Diagnostics: native feed sparse explicit-index timeline",
+      "status": "pass",
+      "durationMs": 5209.5,
+      "details": {
+        "name": "sk-test-diag-sparse-d3eea163fe5784ac",
+        "feed": {
+          "feedId": "sk-test-diag-sparse-d3eea163fe5784ac",
+          "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+          "topic": "5e24d2ff40b9e21b532d4df869e153683cd877e3564b48e0978a015d89ff6117",
+          "manifestReference": "953bf4cc3aee8d92356182437fd9ac9a6703ddfdb7ed727e139326ac9b9a89c2",
+          "identityMode": "app-scoped"
+        },
+        "steps": [
+          {
+            "name": "create-feed",
+            "status": "pass",
+            "durationMs": 18.3,
+            "value": {
+              "feedId": "sk-test-diag-sparse-d3eea163fe5784ac",
+              "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+              "topic": "5e24d2ff40b9e21b532d4df869e153683cd877e3564b48e0978a015d89ff6117",
+              "manifestReference": "953bf4cc3aee8d92356182437fd9ac9a6703ddfdb7ed727e139326ac9b9a89c2",
+              "identityMode": "app-scoped"
+            }
+          },
+          {
+            "name": "write-index-0",
+            "status": "pass",
+            "durationMs": 2288.2,
+            "value": {
+              "index": 0
+            }
+          },
+          {
+            "name": "write-index-5",
+            "status": "pass",
+            "durationMs": 2199.7,
+            "value": {
+              "index": 5
+            }
+          },
+          {
+            "name": "read-index-0",
+            "status": "pass",
+            "durationMs": 535.9,
+            "value": {
+              "index": 0,
+              "nextIndex": 1,
+              "text": "{\"type\":\"swarm-kit:test-center:feed-payload\",\"runId\":\"d3eea163fe5784ac\",\"label\":\"diag-sparse-0\"}"
+            }
+          },
+          {
+            "name": "read-index-5",
+            "status": "pass",
+            "durationMs": 121.5,
+            "value": {
+              "index": 5,
+              "nextIndex": 6,
+              "text": "{\"type\":\"swarm-kit:test-center:feed-payload\",\"runId\":\"d3eea163fe5784ac\",\"label\":\"diag-sparse-5\"}"
+            }
+          },
+          {
+            "name": "duplicate-index-5",
+            "status": "pass",
+            "durationMs": 45.8,
+            "value": {
+              "message": "Feed entry already exists at index 5",
+              "name": "Error",
+              "code": -32602,
+              "reason": "index_already_exists",
+              "data": {
+                "reason": "index_already_exists"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "diagnostics-indexed-soc-timeline",
+      "suite": "diagnostics",
+      "label": "Diagnostics: indexed SOC stream append/read timeline",
+      "status": "pass",
+      "durationMs": 13039.6,
+      "details": {
+        "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+        "identifiers": [
+          {
+            "index": 0,
+            "identifier": "9bf212402a1347b4b1a76d977c815e47fa96e0581430bec2cd28216a1733a348"
+          },
+          {
+            "index": 1,
+            "identifier": "d83f596bdaf0411f24749af9d4c33cc3e762a67dd3d22406ea092dce3445797b"
+          },
+          {
+            "index": 2,
+            "identifier": "b8695f35e8353c1ea8edc88131757a4d8c3e42a796b1d8ae5cb5878c2061eac4"
+          }
+        ],
+        "steps": [
+          {
+            "name": "append-0",
+            "status": "pass",
+            "durationMs": 2455.8,
+            "value": {
+              "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+              "identifier": "9bf212402a1347b4b1a76d977c815e47fa96e0581430bec2cd28216a1733a348",
+              "reference": "dbad866ee4a1131defbea8798b44531bceaa94f7b06e188a980b71112470e4c2",
+              "envelope": {
+                "version": 1,
+                "type": "swarm-kit:test-center:indexed-soc-entry",
+                "index": 0,
+                "previousReference": null,
+                "value": "diag-first"
+              }
+            }
+          },
+          {
+            "name": "read-0",
+            "status": "pass",
+            "durationMs": 28,
+            "value": {
+              "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+              "identifier": "9bf212402a1347b4b1a76d977c815e47fa96e0581430bec2cd28216a1733a348",
+              "reference": "dbad866ee4a1131defbea8798b44531bceaa94f7b06e188a980b71112470e4c2",
+              "envelope": {
+                "version": 1,
+                "type": "swarm-kit:test-center:indexed-soc-entry",
+                "index": 0,
+                "previousReference": null,
+                "value": "diag-first"
+              }
+            }
+          },
+          {
+            "name": "append-1",
+            "status": "pass",
+            "durationMs": 2774.9,
+            "value": {
+              "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+              "identifier": "d83f596bdaf0411f24749af9d4c33cc3e762a67dd3d22406ea092dce3445797b",
+              "reference": "1db155068bb11824b6d5ca9246ac17ed3f702062a5ba508ac667878ea4b61bf1",
+              "envelope": {
+                "version": 1,
+                "type": "swarm-kit:test-center:indexed-soc-entry",
+                "index": 1,
+                "previousReference": "dbad866ee4a1131defbea8798b44531bceaa94f7b06e188a980b71112470e4c2",
+                "value": "diag-second"
+              }
+            }
+          },
+          {
+            "name": "read-1",
+            "status": "pass",
+            "durationMs": 27.5,
+            "value": {
+              "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+              "identifier": "d83f596bdaf0411f24749af9d4c33cc3e762a67dd3d22406ea092dce3445797b",
+              "reference": "1db155068bb11824b6d5ca9246ac17ed3f702062a5ba508ac667878ea4b61bf1",
+              "envelope": {
+                "version": 1,
+                "type": "swarm-kit:test-center:indexed-soc-entry",
+                "index": 1,
+                "previousReference": "dbad866ee4a1131defbea8798b44531bceaa94f7b06e188a980b71112470e4c2",
+                "value": "diag-second"
+              }
+            }
+          },
+          {
+            "name": "append-2",
+            "status": "pass",
+            "durationMs": 3508.3,
+            "value": {
+              "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+              "identifier": "b8695f35e8353c1ea8edc88131757a4d8c3e42a796b1d8ae5cb5878c2061eac4",
+              "reference": "256279b20ab95ead7bfa1534f3bcf5e6d483e1adfe22cc6394908664a74d1c16",
+              "envelope": {
+                "version": 1,
+                "type": "swarm-kit:test-center:indexed-soc-entry",
+                "index": 2,
+                "previousReference": "1db155068bb11824b6d5ca9246ac17ed3f702062a5ba508ac667878ea4b61bf1",
+                "value": "diag-third"
+              }
+            }
+          },
+          {
+            "name": "read-2",
+            "status": "pass",
+            "durationMs": 28.1,
+            "value": {
+              "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+              "identifier": "b8695f35e8353c1ea8edc88131757a4d8c3e42a796b1d8ae5cb5878c2061eac4",
+              "reference": "256279b20ab95ead7bfa1534f3bcf5e6d483e1adfe22cc6394908664a74d1c16",
+              "envelope": {
+                "version": 1,
+                "type": "swarm-kit:test-center:indexed-soc-entry",
+                "index": 2,
+                "previousReference": "1db155068bb11824b6d5ca9246ac17ed3f702062a5ba508ac667878ea4b61bf1",
+                "value": "diag-third"
+              }
+            }
+          },
+          {
+            "name": "read-latest",
+            "status": "pass",
+            "durationMs": 4206.4,
+            "value": [
+              {
+                "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+                "identifier": "b8695f35e8353c1ea8edc88131757a4d8c3e42a796b1d8ae5cb5878c2061eac4",
+                "reference": "256279b20ab95ead7bfa1534f3bcf5e6d483e1adfe22cc6394908664a74d1c16",
+                "envelope": {
+                  "version": 1,
+                  "type": "swarm-kit:test-center:indexed-soc-entry",
+                  "index": 2,
+                  "previousReference": "1db155068bb11824b6d5ca9246ac17ed3f702062a5ba508ac667878ea4b61bf1",
+                  "value": "diag-third"
+                }
+              },
+              {
+                "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+                "identifier": "d83f596bdaf0411f24749af9d4c33cc3e762a67dd3d22406ea092dce3445797b",
+                "reference": "1db155068bb11824b6d5ca9246ac17ed3f702062a5ba508ac667878ea4b61bf1",
+                "envelope": {
+                  "version": 1,
+                  "type": "swarm-kit:test-center:indexed-soc-entry",
+                  "index": 1,
+                  "previousReference": "dbad866ee4a1131defbea8798b44531bceaa94f7b06e188a980b71112470e4c2",
+                  "value": "diag-second"
+                }
+              },
+              {
+                "owner": "0x52054D02A5E265e3afA5e2FC62033aC52E9A81f2",
+                "identifier": "9bf212402a1347b4b1a76d977c815e47fa96e0581430bec2cd28216a1733a348",
+                "reference": "dbad866ee4a1131defbea8798b44531bceaa94f7b06e188a980b71112470e4c2",
+                "envelope": {
+                  "version": 1,
+                  "type": "swarm-kit:test-center:indexed-soc-entry",
+                  "index": 0,
+                  "previousReference": null,
+                  "value": "diag-first"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "environment": {
+    "origin": "http://127.0.0.1:4176",
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) FreedomDev/0.7.5-dev Chrome/146.0.7680.216 Electron/41.7.1 Safari/537.36",
+    "isFreedomBrowser": true
+  }
+}

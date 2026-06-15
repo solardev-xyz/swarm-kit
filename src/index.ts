@@ -16,6 +16,7 @@ export * from './multi-writer-feed.js';
 export * from './objects.js';
 export * from './provider-compliance.js';
 export * from './provider.js';
+export * from './provider-test-center.js';
 export * from './records.js';
 export * from './signed-documents.js';
 export * from './soc.js';
