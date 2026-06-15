@@ -3550,6 +3550,8 @@ function directMethodName(method) {
       return "readFeedEntry";
     case "swarm_listFeeds":
       return "listFeeds";
+    case "swarm_publishData":
+      return "publishData";
     case "swarm_publishChunk":
       return "publishChunk";
     case "swarm_readChunk":
@@ -6918,6 +6920,176 @@ ${"payload-".repeat(800)}`;
       }
     },
     {
+      id: "diagnostics-swarmit-user-feed-journal",
+      suite: "diagnostics",
+      label: "Diagnostics: Swarmit-style user feed latest and history reconstruction",
+      run: async (context) => {
+        const name = feedName(context.runId, "swarmit-user");
+        let feed = null;
+        const createdAtBase = Date.now();
+        const entries = [
+          createSwarmitUserFeedEntry(context.runId, 0, createdAtBase),
+          createSwarmitUserFeedEntry(context.runId, 1, createdAtBase + 1e3),
+          createSwarmitUserFeedEntry(context.runId, 2, createdAtBase + 2e3)
+        ];
+        const steps = [];
+        steps.push(await captureStep("create-feed", async () => {
+          feed = await callSwarm(context.provider, "swarm_createFeed", { name });
+          return summarizeFeed(feed);
+        }));
+        for (let index = 0; index < entries.length; index += 1) {
+          steps.push(await captureStep(`write-entry-${index}`, async () => {
+            const entry = entries[index];
+            if (!entry) throw new Error(`Missing fixture entry ${index}`);
+            const write = await writeFeedEntry(context.provider, {
+              name,
+              data: JSON.stringify(entry)
+            });
+            assertEqual(write.index, index, `Swarmit-style feed write index ${index}`);
+            return {
+              index: write.index,
+              entry
+            };
+          }));
+        }
+        steps.push(await captureStep("read-latest-by-topic-owner", async () => {
+          if (!feed) throw new Error("Feed creation did not produce coordinates");
+          const latest = await readFeedEntry(context.provider, {
+            topic: feed.topic,
+            owner: feed.owner
+          });
+          const decoded = decodeFeedJson(latest);
+          assertEqual(latest.index, entries.length - 1, "Swarmit-style latest index");
+          assertEqual(latest.nextIndex, entries.length, "Swarmit-style latest nextIndex");
+          assertEqual(decoded.submissionRef, entries[entries.length - 1]?.submissionRef, "Swarmit-style latest submissionRef");
+          return {
+            ...summarizeDiagnosticFeedRead(latest),
+            entry: decoded
+          };
+        }));
+        steps.push(await captureStep("parallel-history-by-topic-owner", async () => {
+          if (!feed) throw new Error("Feed creation did not produce coordinates");
+          const { owner, topic } = feed;
+          const latest = await readFeedEntry(context.provider, {
+            topic,
+            owner
+          });
+          const totalEntries = latest.nextIndex ?? latest.index + 1;
+          assertEqual(totalEntries, entries.length, "Swarmit-style total entries from latest");
+          const reads = await Promise.all(Array.from(
+            { length: totalEntries },
+            (_, index) => readFeedEntry(context.provider, {
+              topic,
+              owner,
+              index
+            })
+          ));
+          const decoded = reads.map((read) => decodeFeedJson(read));
+          assertEqual(
+            decoded.map((entry) => entry.submissionRef).join("|"),
+            entries.map((entry) => entry.submissionRef).join("|"),
+            "Swarmit-style reconstructed submission refs"
+          );
+          const newestFirst = [...decoded].sort((a, b) => b.createdAt - a.createdAt);
+          assertEqual(newestFirst[0]?.submissionRef, entries[2]?.submissionRef, "Swarmit-style newest-first sort");
+          assertEqual(new Set(decoded.map((entry) => entry.submissionRef)).size, entries.length, "Swarmit-style submissionRef dedupe size");
+          return {
+            totalEntries,
+            reads: reads.map(summarizeDiagnosticFeedRead),
+            decoded,
+            newestFirst
+          };
+        }));
+        assertDiagnosticSteps(steps, "Swarmit-style user feed journal failed");
+        return {
+          name,
+          feed: feed ? summarizeFeed(feed) : null,
+          entries,
+          steps
+        };
+      }
+    },
+    {
+      id: "diagnostics-feed-manifest-resolution",
+      suite: "diagnostics",
+      label: "Diagnostics: feed manifest resolves latest JSON through bzz fetch",
+      run: async (context) => {
+        const name = feedName(context.runId, "manifest");
+        let feed = null;
+        let manifestUrl = null;
+        let firstPublish = null;
+        let secondPublish = null;
+        let firstReference = null;
+        let secondReference = null;
+        const firstObject = createFeedManifestFixture(context.runId, "first");
+        const secondObject = createFeedManifestFixture(context.runId, "second");
+        const steps = [];
+        steps.push(await captureStep("create-feed", async () => {
+          feed = await callSwarm(context.provider, "swarm_createFeed", { name });
+          manifestUrl = feedManifestUrl(feed);
+          return {
+            ...summarizeFeed(feed),
+            manifestUrl
+          };
+        }));
+        steps.push(await captureStep("publish-first-json", async () => {
+          firstPublish = await publishProviderJson(context.provider, firstObject, `${name}-first.json`);
+          firstReference = firstPublish.reference;
+          return firstPublish;
+        }));
+        steps.push(await captureStep("update-feed-first-reference", async () => {
+          if (!feed || !firstPublish) throw new Error("Feed or first publish result is unavailable");
+          const update = await callSwarm(context.provider, "swarm_updateFeed", {
+            feedId: feed.feedId,
+            reference: firstPublish.reference
+          });
+          assertEqual(update.reference, firstPublish.reference, "first feed update reference");
+          return update;
+        }));
+        steps.push(await captureStep("fetch-manifest-first", async () => {
+          if (!manifestUrl) throw new Error("Feed creation did not produce a manifest URL");
+          const resolved = await fetchJsonWithTimeout(manifestUrl);
+          assertFeedManifestFixture(resolved, "first");
+          return {
+            manifestUrl,
+            resolved
+          };
+        }));
+        steps.push(await captureStep("publish-second-json", async () => {
+          secondPublish = await publishProviderJson(context.provider, secondObject, `${name}-second.json`);
+          secondReference = secondPublish.reference;
+          return secondPublish;
+        }));
+        steps.push(await captureStep("update-feed-second-reference", async () => {
+          if (!feed || !secondPublish) throw new Error("Feed or second publish result is unavailable");
+          const update = await callSwarm(context.provider, "swarm_updateFeed", {
+            feedId: feed.feedId,
+            reference: secondPublish.reference
+          });
+          assertEqual(update.reference, secondPublish.reference, "second feed update reference");
+          return update;
+        }));
+        steps.push(await captureStep("fetch-manifest-second", async () => {
+          if (!manifestUrl) throw new Error("Feed creation did not produce a manifest URL");
+          const resolved = await fetchJsonWithTimeout(manifestUrl);
+          assertFeedManifestFixture(resolved, "second");
+          return {
+            manifestUrl,
+            resolved
+          };
+        }));
+        assertDiagnosticSteps(steps, "Feed manifest latest-resolution failed");
+        return {
+          name,
+          feed: feed ? summarizeFeed(feed) : null,
+          manifestUrl,
+          firstReference,
+          secondReference,
+          steps
+        };
+      }
+    },
+    {
       id: "diagnostics-indexed-soc-timeline",
       suite: "diagnostics",
       label: "Diagnostics: indexed SOC stream append/read timeline",
@@ -7097,6 +7269,31 @@ async function readFeedEntry(provider, params) {
   );
   return result;
 }
+async function publishProviderJson(provider, value, name) {
+  const result = await callSwarm(provider, "swarm_publishData", {
+    data: JSON.stringify(value),
+    contentType: "application/json",
+    name
+  });
+  assertHex2(result.reference, 32, "publishData reference");
+  return result;
+}
+async function fetchJsonWithTimeout(url, timeoutMs = 12e3) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      throw new Error(`Fetch failed with status ${response.status} for ${url}`);
+    }
+    return response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 async function expectProviderReason2(action, expectedReason) {
   try {
     const value = await action();
@@ -7206,6 +7403,47 @@ function summarizeDiagnosticFeedRead(read) {
     text: decodeFeedText(read)
   };
 }
+function createSwarmitUserFeedEntry(runId, index, createdAt) {
+  return {
+    protocol: "freedom-board/user-feed-entry/v1",
+    submissionRef: `bzz://${deriveIdentifier(["swarm-kit:test-center:swarmit-submission", runId, index])}`,
+    boardSlug: "general",
+    kind: index % 2 === 0 ? "post" : "reply",
+    createdAt
+  };
+}
+function createFeedManifestFixture(runId, label) {
+  const createdAt = Date.now();
+  return {
+    protocol: "swarm-kit:test-center:feed-manifest/v1",
+    runId,
+    label,
+    updatedAt: new Date(createdAt).toISOString(),
+    entries: [
+      {
+        submissionRef: `bzz://${deriveIdentifier(["swarm-kit:test-center:feed-manifest-entry", runId, label])}`,
+        createdAt
+      }
+    ]
+  };
+}
+function feedManifestUrl(feed) {
+  if (feed.bzzUrl) return feed.bzzUrl;
+  assertHex2(feed.manifestReference, 32, "feed manifest reference");
+  return `bzz://${feed.manifestReference}/`;
+}
+function assertFeedManifestFixture(value, expectedLabel) {
+  assertCondition(isRecord(value), "resolved feed manifest value must be an object");
+  assertEqual(value.protocol, "swarm-kit:test-center:feed-manifest/v1", "feed manifest protocol");
+  assertEqual(value.label, expectedLabel, "feed manifest label");
+  assertCondition(typeof value.runId === "string" && value.runId.length > 0, "feed manifest runId must be a non-empty string");
+  assertCondition(typeof value.updatedAt === "string" && value.updatedAt.length > 0, "feed manifest updatedAt must be a non-empty string");
+  assertCondition(Array.isArray(value.entries) && value.entries.length === 1, "feed manifest entries must contain one item");
+  const entry = value.entries[0];
+  assertCondition(isRecord(entry), "feed manifest entry must be an object");
+  assertCondition(typeof entry.submissionRef === "string" && entry.submissionRef.startsWith("bzz://"), "feed manifest entry submissionRef must be bzz://");
+  assertCondition(typeof entry.createdAt === "number" && Number.isSafeInteger(entry.createdAt), "feed manifest entry createdAt must be a safe integer");
+}
 function summarizeIndexedSocEntry(entry) {
   return {
     owner: entry.owner,
@@ -7256,6 +7494,9 @@ function requireFeedWrite(feed, index) {
 }
 function decodeFeedText(read) {
   return bytesToUtf8(base64ToBytes(read.data));
+}
+function decodeFeedJson(read) {
+  return JSON.parse(decodeFeedText(read));
 }
 function payloadOfSize(size2, seed) {
   if (!Number.isSafeInteger(size2) || size2 < 0) {
@@ -7313,6 +7554,9 @@ function assertEqual(actual, expected, label) {
 }
 function assertCondition(condition, message) {
   if (!condition) throw new Error(message);
+}
+function isRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 function isWarning(value) {
   return Boolean(value && typeof value === "object" && value.warning === true);

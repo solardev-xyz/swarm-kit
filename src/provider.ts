@@ -32,6 +32,12 @@ export interface SwarmPublishChunkResult {
   reference: string;
 }
 
+export interface SwarmPublishDataResult {
+  reference: string;
+  bzzUrl?: string;
+  tagUid?: string | number;
+}
+
 export interface SwarmSigningIdentity {
   owner: string;
   identityMode?: string;
@@ -99,6 +105,7 @@ export interface SwarmProvider {
   writeFeedEntry?: (params: { name: string; data: string | Uint8Array | ArrayBuffer; index?: number }) => Promise<SwarmWriteFeedEntryResult>;
   readFeedEntry?: (params: { name: string; owner?: string; index?: number } | { topic: string; owner: string; index?: number }) => Promise<SwarmReadFeedEntryResult>;
   listFeeds?: () => Promise<SwarmFeedRecord[]>;
+  publishData?: (params: { data: string | Uint8Array | ArrayBuffer; contentType?: string; name?: string }) => Promise<SwarmPublishDataResult>;
   publishChunk?: (params: { data: string | Uint8Array | ArrayBuffer; span?: number | bigint }) => Promise<SwarmPublishChunkResult>;
   readChunk?: (params: { reference: string }) => Promise<SwarmChunkReadResult>;
   writeSingleOwnerChunk?: (params: { identifier: string; data: string | Uint8Array | ArrayBuffer; span?: number | bigint }) => Promise<SwarmWriteSingleOwnerChunkResult>;
@@ -172,6 +179,7 @@ function directMethodName(method: string): keyof SwarmProvider | null {
     case 'swarm_writeFeedEntry': return 'writeFeedEntry';
     case 'swarm_readFeedEntry': return 'readFeedEntry';
     case 'swarm_listFeeds': return 'listFeeds';
+    case 'swarm_publishData': return 'publishData';
     case 'swarm_publishChunk': return 'publishChunk';
     case 'swarm_readChunk': return 'readChunk';
     case 'swarm_writeSingleOwnerChunk': return 'writeSingleOwnerChunk';

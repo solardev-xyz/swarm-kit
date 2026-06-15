@@ -612,7 +612,8 @@ Browser versus Ant-backed Freedom Browser. It runs selectable suites for:
 - indexed SOC streams
 - high-level Swarm Kit primitives
 - focused diagnostics for CAC size boundaries, delayed reads, native feed
-  timelines, sparse feed timelines, and indexed SOC timelines
+  timelines, sparse feed timelines, Swarmit-style user feed reconstruction,
+  feed-manifest `bzz` latest resolution, and indexed SOC timelines
 - optional SOC/feed stress checks
 
 ```sh
