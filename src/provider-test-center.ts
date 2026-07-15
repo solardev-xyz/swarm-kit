@@ -3,16 +3,20 @@ import { createSwarmKit } from './client.js';
 import { getSwarmErrorReason } from './errors.js';
 import { deriveIdentifier } from './identifiers.js';
 import { createIndexedSocStream, type IndexedSocStreamEntry } from './indexed-soc.js';
+import { driverSupportsMessaging, type SwarmKitSubscriptionMessage } from './driver.js';
 import {
   callSwarm,
+  hasMessagingFeature,
   type SwarmCapabilities,
   type SwarmCreateFeedResult,
   type SwarmFeedRecord,
+  type SwarmMessagingIdentity,
   type SwarmPublishDataResult,
   type SwarmProvider,
   type SwarmProviderErrorLike,
   type SwarmReadFeedEntryResult,
   type SwarmSigningIdentity,
+  type SwarmSubscribeResult,
   type SwarmUpdateFeedResult,
   type SwarmWriteFeedEntryResult,
 } from './provider.js';
@@ -24,6 +28,7 @@ export type ProviderTestCenterSuiteId =
   | 'feed'
   | 'indexed-soc'
   | 'primitives'
+  | 'messaging'
   | 'diagnostics'
   | 'stress';
 
@@ -100,6 +105,10 @@ interface ProviderTestCenterContext {
       text: string;
     }>;
   };
+  messaging?: {
+    supported: boolean;
+    identity?: SwarmMessagingIdentity;
+  };
 }
 
 interface ProviderTestCase {
@@ -121,6 +130,11 @@ interface NormalizedProviderTestCenterOptions {
 
 interface WarningDetails {
   warning: true;
+  details: unknown;
+}
+
+interface SkipDetails {
+  skipped: true;
   details: unknown;
 }
 
@@ -166,6 +180,7 @@ const DEFAULT_SUITES: ProviderTestCenterSuiteId[] = [
   'feed',
   'indexed-soc',
   'primitives',
+  'messaging',
   'diagnostics',
 ];
 
@@ -1232,6 +1247,7 @@ function createTestCases(options: NormalizedProviderTestCenterOptions): Provider
         };
       },
     },
+    ...createMessagingCases().map(messagingCase),
     {
       id: 'stress-soc-sequential',
       suite: 'stress',
@@ -1299,6 +1315,16 @@ async function runTestCase(
 
   try {
     const details = await testCase.run(context);
+    if (isSkip(details)) {
+      return {
+        id: testCase.id,
+        suite: testCase.suite,
+        label: testCase.label,
+        status: 'skip',
+        durationMs: elapsed(started),
+        details: details.details,
+      };
+    }
     if (isWarning(details)) {
       return {
         id: testCase.id,
@@ -1381,21 +1407,384 @@ async function fetchJsonWithTimeout(url: string, timeoutMs = 12_000): Promise<un
   }
 }
 
+function createMessagingCases(): Array<Omit<ProviderTestCase, 'suite'>> {
+  return [
+    {
+      id: 'messaging-feature-detection',
+      label: 'Capabilities advertise messaging feature and limits pre-grant',
+      run: async context => {
+        const capabilities = await callSwarm<SwarmCapabilities>(context.provider, 'swarm_getCapabilities');
+        context.capabilities = capabilities;
+        const supported = hasMessagingFeature(capabilities);
+        context.messaging = { supported };
+        if (!supported) {
+          // The messaging extension is optional; absence is conformant.
+          return { warning: true, details: 'Provider does not advertise the messaging feature — remaining messaging checks are skipped.' };
+        }
+        assertCondition(typeof capabilities.limits?.maxMessageBytes === 'number', 'limits.maxMessageBytes must be a number');
+        assertCondition(typeof capabilities.limits?.maxTargetDepth === 'number', 'limits.maxTargetDepth must be a number');
+        assertCondition(typeof capabilities.limits?.maxSubscriptions === 'number', 'limits.maxSubscriptions must be a number');
+        return {
+          features: capabilities.features,
+          maxMessageBytes: capabilities.limits.maxMessageBytes,
+          maxTargetDepth: capabilities.limits.maxTargetDepth,
+          maxSubscriptions: capabilities.limits.maxSubscriptions,
+        };
+      },
+    },
+    {
+      id: 'messaging-identity-shape',
+      label: 'Messaging identity: compressed key + truncated pssTarget (never the overlay)',
+      run: async context => {
+        const identity = await callSwarm<SwarmMessagingIdentity>(context.provider, 'swarm_getMessagingIdentity');
+        assertCondition(/^0[23][0-9a-fA-F]{64}$/.test(identity.pssPublicKey), 'pssPublicKey must be a 66-char compressed secp256k1 key');
+        assertCondition(/^([0-9a-fA-F]{2})+$/.test(identity.pssTarget), 'pssTarget must be whole bytes of hex');
+        const maxTargetDepth = context.capabilities?.limits?.maxTargetDepth ?? 3;
+        assertCondition(identity.pssTarget.length / 2 <= maxTargetDepth, `pssTarget must be at most ${maxTargetDepth} bytes`);
+        assertCondition(identity.pssTarget.length < 64, 'pssTarget must be a truncated prefix, never the full 32-byte overlay');
+        assertCondition(typeof identity.identityMode === 'string' && identity.identityMode.length > 0, 'identityMode must be a non-empty string');
+        context.messaging = { supported: true, identity };
+        return { pssPublicKey: identity.pssPublicKey, pssTargetBytes: identity.pssTarget.length / 2, identityMode: identity.identityMode };
+      },
+    },
+    {
+      id: 'messaging-subscribe-param-validation',
+      label: 'Subscribe rejects invalid kind and topic/address misuse',
+      run: async context => {
+        return {
+          invalidKind: await expectProviderReason(
+            () => callSwarm(context.provider, 'swarm_subscribe', { kind: 'feed', topic: 't' }),
+            'invalid_kind',
+          ),
+          gsocTopicAndAddress: await expectProviderError(
+            () => callSwarm(context.provider, 'swarm_subscribe', { kind: 'gsoc', topic: 't', address: 'ab'.repeat(32) }),
+            { code: -32602 },
+          ),
+          gsocBadAddress: await expectProviderReason(
+            () => callSwarm(context.provider, 'swarm_subscribe', { kind: 'gsoc', address: 'not-hex' }),
+            'invalid_address',
+          ),
+          pssWithAddress: await expectProviderError(
+            () => callSwarm(context.provider, 'swarm_subscribe', { kind: 'pss', address: 'ab'.repeat(32) }),
+            { code: -32602 },
+          ),
+        };
+      },
+    },
+    {
+      id: 'messaging-sendpss-param-validation',
+      label: 'sendPss rejects bad recipients and targets',
+      run: async context => {
+        const valid = { topic: 't', recipient: `02${'ab'.repeat(32)}`, targets: 'aabb', data: 'x' };
+        return {
+          badRecipient: await expectProviderReason(
+            () => callSwarm(context.provider, 'swarm_sendPss', { ...valid, recipient: 'zz' }),
+            'invalid_recipient',
+          ),
+          missingTargets: await expectProviderReason(
+            () => callSwarm(context.provider, 'swarm_sendPss', { topic: valid.topic, recipient: valid.recipient, data: 'x' }),
+            'invalid_target',
+          ),
+          oversizedTargets: await expectProviderReason(
+            () => callSwarm(context.provider, 'swarm_sendPss', { ...valid, targets: 'aabbccdd' }),
+            'invalid_target',
+          ),
+        };
+      },
+    },
+    {
+      id: 'messaging-sendgsoc-raw-address-rejected',
+      label: 'sendGsoc rejects the raw address variant (nothing to sign with)',
+      run: async context => {
+        return expectProviderReason(
+          () => callSwarm(context.provider, 'swarm_sendGsoc', { address: 'ab'.repeat(32), data: 'x' }),
+          'invalid_address',
+        );
+      },
+    },
+    {
+      id: 'messaging-empty-payload-bounds',
+      label: 'Empty payload: rejected for GSOC (invalid_payload), accepted for PSS',
+      run: async context => {
+        const emptyGsoc = await expectProviderReason(
+          () => callSwarm(context.provider, 'swarm_sendGsoc', { topic: messagingTopic(context, 'empty'), data: '' }),
+          'invalid_payload',
+        );
+        const identity = await requireMessagingIdentity(context);
+        const emptyPss = await callSwarm<{ sent: boolean }>(context.provider, 'swarm_sendPss', {
+          topic: messagingTopic(context, 'empty-pss'),
+          recipient: identity.pssPublicKey,
+          targets: identity.pssTarget,
+          data: '',
+        });
+        assertEqual(emptyPss.sent, true, 'empty PSS send accepted');
+        return { emptyGsoc, emptyPss };
+      },
+    },
+    {
+      id: 'messaging-payload-too-large',
+      label: 'Oversized message rejected with payload_too_large',
+      run: async context => {
+        const limit = context.capabilities?.limits?.maxMessageBytes ?? 4000;
+        return expectProviderReason(
+          () => callSwarm(context.provider, 'swarm_sendGsoc', {
+            topic: messagingTopic(context, 'oversize'),
+            data: 'x'.repeat(limit + 1),
+          }),
+          'payload_too_large',
+        );
+      },
+    },
+    {
+      id: 'messaging-subscription-lifecycle',
+      label: 'Subscribe/unsubscribe lifecycle and subscription_not_found',
+      run: async context => {
+        const subscription = await callSwarm<SwarmSubscribeResult>(context.provider, 'swarm_subscribe', {
+          kind: 'gsoc',
+          topic: messagingTopic(context, 'lifecycle'),
+        });
+        assertCondition(typeof subscription.subscriptionId === 'string' && subscription.subscriptionId.length > 0, 'subscriptionId must be a non-empty string');
+        assertEqual(subscription.kind, 'gsoc', 'subscription kind');
+        assertHex(subscription.key, 32, 'subscription key');
+        const unsubscribed = await callSwarm<{ unsubscribed: boolean }>(context.provider, 'swarm_unsubscribe', {
+          subscriptionId: subscription.subscriptionId,
+        });
+        assertEqual(unsubscribed.unsubscribed, true, 'unsubscribe result');
+        const notFound = await expectProviderReason(
+          () => callSwarm(context.provider, 'swarm_unsubscribe', { subscriptionId: 'nonexistent-subscription' }),
+          'subscription_not_found',
+        );
+        return { subscription, notFound };
+      },
+    },
+    {
+      id: 'messaging-per-origin-cap',
+      label: 'Per-origin subscription cap returns too_many_subscriptions (-32602)',
+      run: async context => {
+        const cap = context.capabilities?.limits?.maxSubscriptions ?? 32;
+        if (cap > 40) {
+          return { warning: true, details: `maxSubscriptions is ${cap}; skipping cap exhaustion to keep the run bounded.` };
+        }
+        // Same key on purpose: same-key subscriptions multiplex onto one
+        // node pipeline, so this exercises the per-origin cap without
+        // touching the node-wide neighborhood pool.
+        const topic = messagingTopic(context, 'cap');
+        const opened: string[] = [];
+        try {
+          for (let index = 0; index < cap; index += 1) {
+            const subscription = await callSwarm<SwarmSubscribeResult>(context.provider, 'swarm_subscribe', { kind: 'gsoc', topic });
+            opened.push(subscription.subscriptionId);
+          }
+          const capError = await expectProviderError(
+            () => callSwarm(context.provider, 'swarm_subscribe', { kind: 'gsoc', topic }),
+            { reason: 'too_many_subscriptions', code: -32602 },
+          );
+          return { cap, capError };
+        } finally {
+          for (const subscriptionId of opened) {
+            await callSwarm(context.provider, 'swarm_unsubscribe', { subscriptionId }).catch(() => undefined);
+          }
+        }
+      },
+    },
+    {
+      id: 'messaging-gsoc-roundtrip',
+      label: 'GSOC round-trip: send address matches subscribe key; message event delivers',
+      run: async context => {
+        const driver = context.kit.driver;
+        if (!driverSupportsMessaging(driver)) {
+          return { warning: true, details: 'Provider has no event surface (on/removeListener); cannot observe deliveries.' };
+        }
+        const topic = messagingTopic(context, 'gsoc-roundtrip');
+        const payload = `test-center gsoc ${context.runId}`;
+        const subscription = await driver.subscribe!({ kind: 'gsoc', topic });
+        try {
+          const delivery = waitForSubscriptionMessage(driver, subscription.subscriptionId, MESSAGING_ROUNDTRIP_TIMEOUT_MS);
+          const sent = await callSwarm<{ sent: boolean; address: string }>(context.provider, 'swarm_sendGsoc', { topic, data: payload });
+          assertSameLower(sent.address, subscription.key, 'sendGsoc address vs subscribe key');
+          const message = await delivery;
+          if (!message) {
+            return {
+              warning: true,
+              details: `Send accepted and address matched, but no delivery within ${MESSAGING_ROUNDTRIP_TIMEOUT_MS / 1000}s — network-dependent; retry on a well-connected node.`,
+            };
+          }
+          assertEqual(bytesToUtf8(message.data), payload, 'delivered GSOC payload');
+          assertEqual(message.kind, 'gsoc', 'delivered kind');
+          assertSameLower(message.key, subscription.key, 'delivered key');
+          // Delivery must stop after unsubscribe.
+          await driver.unsubscribe!(subscription.subscriptionId);
+          const afterUnsubscribe = waitForSubscriptionMessage(driver, subscription.subscriptionId, 5_000);
+          await callSwarm(context.provider, 'swarm_sendGsoc', { topic, data: `${payload} after-unsubscribe` });
+          assertEqual(await afterUnsubscribe, null, 'no delivery after unsubscribe');
+          return { key: subscription.key, deliveredAt: message.receivedAt };
+        } finally {
+          await driver.unsubscribe!(subscription.subscriptionId).catch(() => undefined);
+        }
+      },
+    },
+    {
+      id: 'messaging-pss-roundtrip',
+      label: 'PSS round-trip: encrypted send to own identity delivers decrypted',
+      run: async context => {
+        const driver = context.kit.driver;
+        if (!driverSupportsMessaging(driver)) {
+          return { warning: true, details: 'Provider has no event surface (on/removeListener); cannot observe deliveries.' };
+        }
+        const identity = await requireMessagingIdentity(context);
+        const topic = messagingTopic(context, 'pss-roundtrip');
+        const payload = `test-center pss ${context.runId}`;
+        const subscription = await driver.subscribe!({ kind: 'pss', topic });
+        try {
+          const delivery = waitForSubscriptionMessage(driver, subscription.subscriptionId, MESSAGING_ROUNDTRIP_TIMEOUT_MS);
+          await callSwarm(context.provider, 'swarm_sendPss', {
+            topic,
+            recipient: identity.pssPublicKey,
+            targets: identity.pssTarget,
+            data: payload,
+          });
+          const message = await delivery;
+          if (!message) {
+            return {
+              warning: true,
+              details: `Send accepted, but no delivery within ${MESSAGING_ROUNDTRIP_TIMEOUT_MS / 1000}s — network-dependent; retry on a well-connected node.`,
+            };
+          }
+          assertEqual(bytesToUtf8(message.data), payload, 'delivered PSS payload');
+          assertEqual(message.kind, 'pss', 'delivered kind');
+          return { key: subscription.key, deliveredAt: message.receivedAt };
+        } finally {
+          await driver.unsubscribe!(subscription.subscriptionId).catch(() => undefined);
+        }
+      },
+    },
+    {
+      id: 'messaging-node-capacity-distinction',
+      label: 'Node pipeline exhaustion is a retryable 4900, not too_many_subscriptions',
+      run: async context => {
+        // Distinct topics land in distinct neighborhoods; the node bounds
+        // its aggregate pool (reference implementation: 8). Open distinct
+        // subscriptions until the node refuses and assert the error shape.
+        const opened: string[] = [];
+        try {
+          for (let index = 0; index < 10; index += 1) {
+            try {
+              const subscription = await callSwarm<SwarmSubscribeResult>(context.provider, 'swarm_subscribe', {
+                kind: 'gsoc',
+                topic: messagingTopic(context, `capacity-${index}`),
+              });
+              opened.push(subscription.subscriptionId);
+            } catch (error) {
+              const providerError = error as SwarmProviderErrorLike;
+              assertEqual(providerError.code, 4900, 'node capacity error code');
+              assertCondition(
+                getSwarmErrorReason(error) !== 'too_many_subscriptions',
+                'node capacity exhaustion must not masquerade as the per-origin cap',
+              );
+              return { refusedAfter: opened.length, error: serializeProviderTestError(error) };
+            }
+          }
+          return {
+            warning: true,
+            details: `No node-capacity refusal within ${opened.length} distinct-topic subscriptions (pool larger than probed, or other slots free).`,
+          };
+        } finally {
+          for (const subscriptionId of opened) {
+            await callSwarm(context.provider, 'swarm_unsubscribe', { subscriptionId }).catch(() => undefined);
+          }
+        }
+      },
+    },
+  ];
+}
+
+const MESSAGING_ROUNDTRIP_TIMEOUT_MS = 120_000;
+
+/**
+ * Wrap a messaging case with the extension-optionality gate: when the
+ * provider does not advertise the messaging feature (established by
+ * messaging-feature-detection), the case reports as skipped rather than
+ * failing a conformant provider.
+ */
+function messagingCase(
+  testCase: Omit<ProviderTestCase, 'suite'>,
+): ProviderTestCase {
+  return {
+    ...testCase,
+    suite: 'messaging',
+    run: async context => {
+      if (context.messaging?.supported === false) {
+        return { skipped: true, details: 'Provider does not advertise the messaging feature.' } satisfies SkipDetails;
+      }
+      return testCase.run(context);
+    },
+  };
+}
+
+function messagingTopic(context: ProviderTestCenterContext, label: string): string {
+  return `swarm-kit:test-center:messaging:${context.runId}:${label}`;
+}
+
+async function requireMessagingIdentity(context: ProviderTestCenterContext): Promise<SwarmMessagingIdentity> {
+  if (context.messaging?.identity) return context.messaging.identity;
+  const identity = await callSwarm<SwarmMessagingIdentity>(context.provider, 'swarm_getMessagingIdentity');
+  context.messaging = { supported: true, identity };
+  return identity;
+}
+
+/** Resolve the first message for a subscription, or null on timeout. */
+function waitForSubscriptionMessage(
+  driver: ProviderTestCenterContext['kit']['driver'],
+  subscriptionId: string,
+  timeoutMs: number,
+): Promise<SwarmKitSubscriptionMessage | null> {
+  return new Promise((resolve) => {
+    const detach = driver.onSubscriptionMessage!((message) => {
+      if (message.subscriptionId !== subscriptionId) return;
+      cleanup();
+      resolve(message);
+    });
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve(null);
+    }, timeoutMs);
+    function cleanup() {
+      clearTimeout(timer);
+      detach();
+    }
+  });
+}
+
+async function expectProviderError(
+  action: () => Promise<unknown>,
+  expected: { reason?: string; code?: number },
+): Promise<SerializedProviderTestError> {
+  const label = [
+    expected.reason !== undefined ? `reason "${expected.reason}"` : null,
+    expected.code !== undefined ? `code ${expected.code}` : null,
+  ].filter(Boolean).join(' and ');
+  try {
+    const value = await action();
+    throw new Error(`Expected provider error with ${label}, but call resolved with ${JSON.stringify(summarizeValue(value))}`);
+  } catch (error) {
+    const reason = getSwarmErrorReason(error);
+    const code = (error as SwarmProviderErrorLike).code;
+    if (
+      (expected.reason !== undefined && reason !== expected.reason) ||
+      (expected.code !== undefined && code !== expected.code)
+    ) {
+      const serialized = serializeProviderTestError(error);
+      throw new Error(`Expected provider error with ${label}, received reason "${reason ?? 'none'}" code ${code ?? 'none'}: ${serialized.message}`);
+    }
+    return serializeProviderTestError(error);
+  }
+}
+
 async function expectProviderReason(
   action: () => Promise<unknown>,
   expectedReason: string,
 ): Promise<SerializedProviderTestError> {
-  try {
-    const value = await action();
-    throw new Error(`Expected provider error ${expectedReason}, but call resolved with ${JSON.stringify(summarizeValue(value))}`);
-  } catch (error) {
-    const reason = getSwarmErrorReason(error);
-    if (reason !== expectedReason) {
-      const serialized = serializeProviderTestError(error);
-      throw new Error(`Expected provider reason "${expectedReason}", received "${reason ?? 'none'}": ${serialized.message}`);
-    }
-    return serializeProviderTestError(error);
-  }
+  return expectProviderError(action, { reason: expectedReason });
 }
 
 function createTestIndexedStream(context: ProviderTestCenterContext) {
@@ -1727,6 +2116,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isWarning(value: unknown): value is WarningDetails {
   return Boolean(value && typeof value === 'object' && (value as WarningDetails).warning === true);
+}
+
+function isSkip(value: unknown): value is SkipDetails {
+  return Boolean(value && typeof value === 'object' && (value as SkipDetails).skipped === true);
 }
 
 function now(): number {
