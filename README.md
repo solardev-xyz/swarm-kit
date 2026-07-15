@@ -96,7 +96,21 @@ console.log(value)
 | Encryption | `kit.crypto.*` | Symmetric AES-GCM and P-256 ECDH public-key encrypted envelopes. |
 | Signed documents | `kit.signedDocuments.*` | Canonical signed JSON envelopes with P-256 and Ethereum wallet support. |
 | Commit-reveal | `kit.commitReveal.create` | Deterministic SOC commits and later reveals for sealed values. |
+| Live topics | `kit.live.topic` | Raw GSOC pub/sub: bytes in, bytes out, no envelope (interops with any sender on the topic). |
+| Live bus | `kit.live.bus` | Multiplexed channels over ONE topic/node pipeline, with auto-nonce and object-graph spillover for oversized payloads. |
+| Live inbox (PSS) | `kit.live.inbox`, `kit.live.sendToInbox` | Encrypted point-to-point messages addressed via shareable inbox cards. |
+| Live multi-writer feeds | `kit.live.multiWriterFeed` | Durable multi-writer feed + GSOC head hints: catch-up from the feed, live entries via messaging, writer discovery. |
 | Provider compliance | `runSwarmProviderCompliance` | Browser-runnable contract checks for real provider behavior. |
+
+The `kit.live.*` primitives require the provider's optional messaging
+extension (PSS/GSOC). Detect it via
+`(await kit.getCapabilities()).features?.includes('messaging')`. Messaging is
+best-effort, unordered, at-least-once, and unauthenticated at the transport
+layer — the live primitives treat durable Swarm structures as the source of
+truth and messaging as live propagation, which is the architecture the
+messaging SWIP prescribes. Note the node bounds concurrent distinct-topic
+subscriptions node-wide; prefer one `kit.live.bus` per app over a topic per
+widget.
 
 ## Driver And Provider Adapter
 
@@ -615,6 +629,12 @@ Browser versus Ant-backed Freedom Browser. It runs selectable suites for:
   timelines, sparse feed timelines, Swarmit-style user feed reconstruction,
   feed-manifest `bzz` latest resolution, and indexed SOC timelines
 - optional SOC/feed stress checks
+- messaging extension compliance (feature/limits detection, identity shape
+  with `pssTarget` truncation, the `-32602` reason vocabulary including
+  `invalid_payload` vs the empty-PSS allowance and the rejected raw-address
+  GSOC send, subscribe lifecycle, per-origin cap vs retryable node-capacity
+  `4900`, and live GSOC/PSS round-trips that warn instead of failing when the
+  network does not deliver within the window)
 
 ```sh
 npm run dev:test-center
@@ -635,6 +655,23 @@ Recommended provider comparison workflow:
    observed error data where available.
 
 Example Bee/Ant comparison reports live in `docs/reports`.
+
+## Live Chat Demo
+
+`examples/chat` is a two-profile demo of the live primitives: room messages
+are durable multi-writer feed entries (signed per writer, catch-up on join)
+delivered live via GSOC hints on a shared `kit.live.bus`; presence announces
+peers and their PSS inbox cards; direct messages travel encrypted over PSS.
+
+```sh
+npm run dev:chat
+```
+
+Then open `http://127.0.0.1:4177/` in **two Freedom Browser profiles** (each
+profile runs its own node and identity), join the same room, and chat across
+the real network. Both nodes need usable postage stamps to send. The room is
+open by design — every discovered writer is accepted; a real application
+would gate `onWriterDiscovered` with its own trust policy.
 
 ## Playground
 

@@ -37,10 +37,10 @@ var init_u64 = __esm({
 });
 
 // node_modules/@noble/hashes/esm/crypto.js
-var crypto;
+var crypto2;
 var init_crypto = __esm({
   "node_modules/@noble/hashes/esm/crypto.js"() {
-    crypto = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : void 0;
+    crypto2 = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : void 0;
   }
 });
 
@@ -135,11 +135,11 @@ function createHasher(hashCons) {
   return hashC;
 }
 function randomBytes(bytesLength = 32) {
-  if (crypto && typeof crypto.getRandomValues === "function") {
-    return crypto.getRandomValues(new Uint8Array(bytesLength));
+  if (crypto2 && typeof crypto2.getRandomValues === "function") {
+    return crypto2.getRandomValues(new Uint8Array(bytesLength));
   }
-  if (crypto && typeof crypto.randomBytes === "function") {
-    return Uint8Array.from(crypto.randomBytes(bytesLength));
+  if (crypto2 && typeof crypto2.randomBytes === "function") {
+    return Uint8Array.from(crypto2.randomBytes(bytesLength));
   }
   throw new Error("crypto.getRandomValues must be defined");
 }
@@ -3499,6 +3499,9 @@ function stringifyCanonical(value) {
 }
 
 // src/provider.ts
+function hasMessagingFeature(capabilities) {
+  return capabilities?.features?.includes("messaging") === true;
+}
 function getWindowSwarm() {
   const swarm = detectWindowSwarm();
   if (!swarm) {
@@ -3562,6 +3565,16 @@ function directMethodName(method) {
       return "readSingleOwnerChunk";
     case "swarm_getSigningIdentity":
       return "getSigningIdentity";
+    case "swarm_getMessagingIdentity":
+      return "getMessagingIdentity";
+    case "swarm_subscribe":
+      return "subscribe";
+    case "swarm_unsubscribe":
+      return "unsubscribe";
+    case "swarm_sendPss":
+      return "sendPss";
+    case "swarm_sendGsoc":
+      return "sendGsoc";
     default:
       return null;
   }
@@ -3571,6 +3584,9 @@ function sleep(ms) {
 }
 
 // src/driver.ts
+function driverSupportsMessaging(driver) {
+  return typeof driver.subscribe === "function" && typeof driver.onSubscriptionMessage === "function";
+}
 function createWindowSwarmDriver(provider) {
   const driver = {
     isSwarmKitDriver: true,
@@ -3610,6 +3626,60 @@ function createWindowSwarmDriver(provider) {
   }
   if (provider.requestAccess || provider.request) {
     driver.requestAccess = () => callSwarm(provider, "swarm_requestAccess");
+  }
+  if (provider.getMessagingIdentity || provider.request) {
+    driver.getMessagingIdentity = () => callSwarm(provider, "swarm_getMessagingIdentity");
+  }
+  if (provider.subscribe || provider.request) {
+    driver.subscribe = (params) => callSwarm(provider, "swarm_subscribe", {
+      kind: params.kind,
+      ...params.topic !== void 0 ? { topic: params.topic } : {},
+      ...params.address !== void 0 ? { address: params.address } : {}
+    });
+  }
+  if (provider.unsubscribe || provider.request) {
+    driver.unsubscribe = async (subscriptionId) => {
+      await callSwarm(provider, "swarm_unsubscribe", { subscriptionId });
+    };
+  }
+  if (provider.sendPss || provider.request) {
+    driver.sendPss = async (params) => {
+      await callSwarm(provider, "swarm_sendPss", {
+        topic: params.topic,
+        recipient: params.recipient,
+        targets: params.targets,
+        data: params.data
+      });
+    };
+  }
+  if (provider.sendGsoc || provider.request) {
+    driver.sendGsoc = (params) => callSwarm(provider, "swarm_sendGsoc", {
+      topic: params.topic,
+      data: params.data
+    });
+  }
+  if (typeof provider.on === "function") {
+    const handlers = /* @__PURE__ */ new Set();
+    const shared = (payload) => {
+      const message = payload;
+      if (message?.type !== "swarm_subscription" || !message.result) return;
+      const decoded = {
+        subscriptionId: message.subscription,
+        kind: message.result.kind,
+        key: message.result.key,
+        data: base64ToBytes(message.result.data),
+        receivedAt: message.result.receivedAt
+      };
+      for (const handler of [...handlers]) handler(decoded);
+    };
+    driver.onSubscriptionMessage = (handler) => {
+      if (handlers.size === 0) provider.on?.("message", shared);
+      handlers.add(handler);
+      return () => {
+        if (!handlers.delete(handler)) return;
+        if (handlers.size === 0) provider.removeListener?.("message", shared);
+      };
+    };
   }
   return driver;
 }
@@ -4316,6 +4386,467 @@ function defaultSameEnvelope(stored, expected) {
   return JSON.stringify(stored) === JSON.stringify(expected);
 }
 
+// src/multi-writer-feed.ts
+var DEFAULT_MULTI_WRITER_NAMESPACE = "swarm-kit:multi-writer-feed:v1";
+var DEFAULT_WRITER_ID = "default";
+function createMultiWriterFeed(provider, options) {
+  const namespace = options.namespace ?? DEFAULT_MULTI_WRITER_NAMESPACE;
+  const localWriterId = options.writerId ?? DEFAULT_WRITER_ID;
+  function normalizeWriterId(writerId = localWriterId) {
+    if (!writerId.trim()) throw new Error("Multi-writer feed writerId must not be empty");
+    return writerId;
+  }
+  function streamFor(writerId = localWriterId) {
+    const normalizedWriterId = normalizeWriterId(writerId);
+    return createIndexedSocStream(provider, {
+      namespace,
+      parts: [options.topic, normalizedWriterId],
+      entryTag: "entry",
+      label: "multi-writer feed",
+      parseEnvelope: (value, context) => {
+        const envelope = parseEntryEnvelope(value, options.topic, normalizedWriterId);
+        if (envelope.index !== context.index) {
+          throw new Error(`Multi-writer feed entry index mismatch for ${context.reference}`);
+        }
+        return envelope;
+      },
+      sameEnvelope
+    });
+  }
+  async function hydrateEntry(record) {
+    const payload = await readObjectJson(provider, record.envelope.payloadReference);
+    return {
+      ...record.envelope,
+      owner: record.soc.owner,
+      identifier: record.soc.identifier,
+      reference: record.soc.reference,
+      payload
+    };
+  }
+  async function readEntryByAddress(reference, owner, writerId) {
+    const soc = await readSocBytesByAddress(provider, reference);
+    if (soc.owner.toLowerCase() !== owner.toLowerCase()) {
+      throw new Error(`Multi-writer feed owner mismatch for ${reference}`);
+    }
+    const envelope = parseEntryEnvelope(bytesToJson(soc.bytes), options.topic, writerId);
+    if (soc.identifier.toLowerCase() !== streamFor(writerId).entryIdentifier(envelope.index).toLowerCase()) {
+      throw new Error(`Multi-writer feed identifier mismatch for ${reference}`);
+    }
+    return hydrateEntry({ envelope, soc });
+  }
+  async function readAt(owner, index, readOptions = {}) {
+    const writerId = normalizeWriterId(readOptions.writerId);
+    const record = await streamFor(writerId).readRecord(owner, index);
+    return record ? hydrateEntry(record) : null;
+  }
+  async function readWriter(owner, readOptions = {}) {
+    const writerId = normalizeWriterId(readOptions.writerId);
+    const limit = readOptions.limit ?? 10;
+    assertIndexedSocLimit(limit, "multi-writer feed read limit");
+    if (limit === 0) return [];
+    const latest = await streamFor(writerId).readLatestRecord(owner);
+    if (!latest) return [];
+    const entries = [];
+    let current = await hydrateEntry(latest);
+    while (current && entries.length < limit) {
+      entries.push(current);
+      current = current.previousReference ? await readEntryByAddress(current.previousReference, owner, writerId) : null;
+    }
+    return entries;
+  }
+  return {
+    topic: options.topic,
+    writerId: localWriterId,
+    entryIdentifier: (index, writerId = localWriterId) => streamFor(writerId).entryIdentifier(index),
+    getOwner: streamFor(localWriterId).getOwner,
+    async append(payload, appendOptions = {}) {
+      const publishedPayload = await publishObjectJson(provider, payload);
+      const writtenAt = new Date(appendOptions.at ?? Date.now()).toISOString();
+      const appended = await streamFor(localWriterId).append(({ index, previousReference }) => ({
+        version: 1,
+        type: "swarm-kit:multi-writer-feed-entry",
+        topic: options.topic,
+        writerId: localWriterId,
+        index,
+        previousReference,
+        payloadReference: publishedPayload.reference,
+        payloadSize: publishedPayload.size,
+        writtenAt
+      }));
+      return {
+        ...appended.envelope,
+        owner: appended.owner,
+        identifier: appended.identifier,
+        reference: appended.reference,
+        payload,
+        entryWrite: appended.entryWrite
+      };
+    },
+    readAt,
+    readWriter,
+    async readLatest(writers, readOptions = {}) {
+      const limitPerWriter = readOptions.limitPerWriter ?? 10;
+      assertIndexedSocLimit(limitPerWriter, "multi-writer feed limitPerWriter");
+      if (readOptions.limit !== void 0 && (!Number.isSafeInteger(readOptions.limit) || readOptions.limit < 0)) {
+        throw new Error("Multi-writer feed limit must be a non-negative safe integer");
+      }
+      const results = await Promise.all(writers.map(
+        (writer) => readWriter(writer.owner, {
+          writerId: writer.writerId ?? localWriterId,
+          limit: limitPerWriter
+        })
+      ));
+      const merged = results.flat().sort(compareEntriesNewestFirst);
+      return readOptions.limit === void 0 ? merged : merged.slice(0, readOptions.limit);
+    }
+  };
+}
+function parseEntryEnvelope(value, topic, writerId) {
+  if (value.version !== 1 || value.type !== "swarm-kit:multi-writer-feed-entry" || value.topic !== topic || value.writerId !== writerId || !Number.isSafeInteger(value.index) || value.index < 0 || !(typeof value.previousReference === "string" || value.previousReference === null) || typeof value.payloadReference !== "string" || typeof value.payloadSize !== "number" || !Number.isSafeInteger(value.payloadSize) || value.payloadSize < 0 || typeof value.writtenAt !== "string") {
+    throw new Error("Invalid multi-writer feed entry");
+  }
+  return value;
+}
+function sameEnvelope(a, b) {
+  return a.version === b.version && a.type === b.type && a.topic === b.topic && a.writerId === b.writerId && a.index === b.index && a.previousReference === b.previousReference && a.payloadReference === b.payloadReference && a.payloadSize === b.payloadSize && a.writtenAt === b.writtenAt;
+}
+function compareEntriesNewestFirst(a, b) {
+  const time = Date.parse(b.writtenAt) - Date.parse(a.writtenAt);
+  if (time !== 0) return time;
+  const index = b.index - a.index;
+  if (index !== 0) return index;
+  const owner = a.owner.localeCompare(b.owner);
+  if (owner !== 0) return owner;
+  return a.writerId.localeCompare(b.writerId);
+}
+
+// src/live.ts
+async function openLiveSubscription(driver, params, handler) {
+  if (!driverSupportsMessaging(driver)) {
+    throw new Error("Swarm driver does not support messaging (subscribe/message events)");
+  }
+  const subscription = await driver.subscribe(params);
+  const detach = driver.onSubscriptionMessage((message) => {
+    if (message.subscriptionId !== subscription.subscriptionId) return;
+    handler({ data: message.data, key: message.key, receivedAt: message.receivedAt });
+  });
+  return {
+    subscriptionId: subscription.subscriptionId,
+    key: subscription.key,
+    async unsubscribe() {
+      detach();
+      await driver.unsubscribe(subscription.subscriptionId);
+    }
+  };
+}
+function createLiveTopic(input, options) {
+  const driver = toSwarmKitDriver(input);
+  return {
+    topic: options.topic,
+    subscribe(handler) {
+      return openLiveSubscription(driver, { kind: "gsoc", topic: options.topic }, handler);
+    },
+    async sendBytes(data) {
+      if (!driver.sendGsoc) throw new Error("Swarm driver does not support sendGsoc");
+      return driver.sendGsoc({ topic: options.topic, data: normalizeBytes(data) });
+    },
+    sendText(text) {
+      return this.sendBytes(utf8ToBytes(text));
+    },
+    sendJson(value) {
+      return this.sendBytes(jsonToBytes(value));
+    }
+  };
+}
+var LIVE_BUS_PROTOCOL = "swarm-kit:live-bus/v1";
+var DEFAULT_MAX_MESSAGE_BYTES = 3584;
+function randomNonceHex() {
+  return bytesToHex(crypto.getRandomValues(new Uint8Array(8)));
+}
+function parseBusFrame(data) {
+  let frame;
+  try {
+    frame = bytesToJson(data);
+  } catch {
+    return null;
+  }
+  if (frame?.p !== LIVE_BUS_PROTOCOL || typeof frame.c !== "string") return null;
+  return frame;
+}
+function createLiveBus(input, options) {
+  const driver = toSwarmKitDriver(input);
+  const topic = createLiveTopic(driver, { topic: options.topic });
+  const handlers = /* @__PURE__ */ new Map();
+  let subscribing = null;
+  let maxMessageBytes = null;
+  async function messageLimit() {
+    if (maxMessageBytes !== null) return maxMessageBytes;
+    let limit = DEFAULT_MAX_MESSAGE_BYTES;
+    try {
+      const capabilities = await driver.getCapabilities?.();
+      if (typeof capabilities?.limits?.maxMessageBytes === "number") {
+        limit = capabilities.limits.maxMessageBytes;
+      }
+    } catch {
+    }
+    maxMessageBytes = limit;
+    return limit;
+  }
+  async function dispatch(message) {
+    const frame = parseBusFrame(message.data);
+    if (!frame) return;
+    const channelHandlers = handlers.get(frame.c);
+    if (!channelHandlers || channelHandlers.size === 0) return;
+    let value;
+    let spilled = false;
+    if (frame.r !== void 0) {
+      spilled = true;
+      try {
+        value = await readObjectJson(driver, frame.r);
+      } catch (error) {
+        console.warn(`[swarm-kit] live bus: failed to resolve spilled payload ${frame.r}:`, normalizeError(error).message);
+        return;
+      }
+    } else {
+      value = frame.d;
+    }
+    const busMessage = {
+      channel: frame.c,
+      value,
+      nonce: frame.n,
+      sentAt: frame.t,
+      receivedAt: message.receivedAt,
+      spilled
+    };
+    for (const handler of channelHandlers) {
+      try {
+        handler(busMessage);
+      } catch (error) {
+        console.warn("[swarm-kit] live bus handler failed:", normalizeError(error).message);
+      }
+    }
+  }
+  async function ensureSubscribed() {
+    subscribing ??= topic.subscribe((message) => {
+      void dispatch(message);
+    });
+    await subscribing;
+  }
+  return {
+    topic: options.topic,
+    channel(name) {
+      return {
+        name,
+        async send(value) {
+          const frame = {
+            p: LIVE_BUS_PROTOCOL,
+            c: name,
+            n: randomNonceHex(),
+            t: Date.now(),
+            d: value
+          };
+          const bytes = jsonToBytes(frame);
+          if (bytes.length <= await messageLimit()) {
+            await topic.sendBytes(bytes);
+            return;
+          }
+          const published = await publishObjectJson(driver, value);
+          delete frame.d;
+          frame.r = published.reference;
+          await topic.sendJson(frame);
+        },
+        async subscribe(handler) {
+          await ensureSubscribed();
+          let set = handlers.get(name);
+          if (!set) {
+            set = /* @__PURE__ */ new Set();
+            handlers.set(name, set);
+          }
+          const typedHandler = handler;
+          set.add(typedHandler);
+          return () => {
+            set.delete(typedHandler);
+            if (set.size === 0) handlers.delete(name);
+          };
+        }
+      };
+    },
+    async close() {
+      handlers.clear();
+      const pending = subscribing;
+      subscribing = null;
+      if (pending) await (await pending).unsubscribe();
+    }
+  };
+}
+var INBOX_CARD_TYPE = "swarm-kit:inbox-card/v1";
+var DEFAULT_INBOX_TOPIC = "swarm-kit:inbox/v1";
+function createLiveInbox(input, options = {}) {
+  const driver = toSwarmKitDriver(input);
+  const topic = options.topic ?? DEFAULT_INBOX_TOPIC;
+  let cachedIdentity = null;
+  async function identity() {
+    if (!driver.getMessagingIdentity) {
+      throw new Error("Swarm driver does not support getMessagingIdentity");
+    }
+    cachedIdentity ??= await driver.getMessagingIdentity();
+    return cachedIdentity;
+  }
+  return {
+    topic,
+    identity,
+    async card() {
+      const resolved = await identity();
+      return {
+        type: INBOX_CARD_TYPE,
+        pssPublicKey: resolved.pssPublicKey,
+        pssTarget: resolved.pssTarget,
+        topic
+      };
+    },
+    subscribe(handler) {
+      return openLiveSubscription(driver, { kind: "pss", topic }, handler);
+    }
+  };
+}
+function isLiveInboxCard(value) {
+  const card = value;
+  return card?.type === INBOX_CARD_TYPE && typeof card.pssPublicKey === "string" && typeof card.pssTarget === "string" && typeof card.topic === "string";
+}
+async function sendToInbox(input, card, data) {
+  const driver = toSwarmKitDriver(input);
+  if (!driver.sendPss) throw new Error("Swarm driver does not support sendPss");
+  if (!isLiveInboxCard(card)) throw new Error("Invalid inbox card");
+  await driver.sendPss({
+    topic: card.topic,
+    recipient: card.pssPublicKey,
+    targets: card.pssTarget,
+    data: normalizeBytes(data)
+  });
+}
+function sendTextToInbox(input, card, text) {
+  return sendToInbox(input, card, utf8ToBytes(text));
+}
+function sendJsonToInbox(input, card, value) {
+  return sendToInbox(input, card, jsonToBytes(value));
+}
+var MWF_HINT_CHANNEL = "swarm-kit:mwf-hint/v1";
+var MAX_HINT_GAP = 25;
+function createLiveMultiWriterFeed(input, options) {
+  const driver = toSwarmKitDriver(input);
+  const { bus: providedBus, ...feedOptions } = options;
+  const feed = createMultiWriterFeed(driver, feedOptions);
+  const ownsBus = !providedBus;
+  const bus = providedBus ?? createLiveBus(driver, { topic: `swarm-kit:mwf/v1:${options.topic}` });
+  const hints = bus.channel(MWF_HINT_CHANNEL);
+  function isHintForFeed(hint) {
+    return hint?.topic === options.topic && typeof hint.owner === "string" && typeof hint.writerId === "string" && Number.isSafeInteger(hint.index) && hint.index >= 0;
+  }
+  return {
+    feed,
+    topic: options.topic,
+    async append(payload) {
+      const appended = await feed.append(payload);
+      try {
+        await hints.send({
+          topic: options.topic,
+          owner: appended.owner,
+          writerId: appended.writerId,
+          index: appended.index
+        });
+      } catch (error) {
+        console.warn("[swarm-kit] live multi-writer feed hint failed:", normalizeError(error).message);
+      }
+      return appended;
+    },
+    async subscribe({ writers, onEntry, onWriterDiscovered, catchUp = true, catchUpLimitPerWriter = 10 }) {
+      const accepted = /* @__PURE__ */ new Map();
+      const writerKey = (owner, writerId) => `${owner.toLowerCase()}:${writerId}`;
+      function acceptWriter(writer) {
+        const writerId = writer.writerId ?? feed.writerId;
+        const state = {
+          writer: { owner: writer.owner, writerId },
+          lastDelivered: -1,
+          queue: Promise.resolve()
+        };
+        accepted.set(writerKey(writer.owner, writerId), state);
+        return state;
+      }
+      function replay(state, entries) {
+        for (const entry of [...entries].reverse()) {
+          if (entry.index <= state.lastDelivered) continue;
+          state.lastDelivered = entry.index;
+          onEntry(entry);
+        }
+      }
+      function enqueueDeliverThrough(state, index) {
+        state.queue = state.queue.then(async () => {
+          if (index <= state.lastDelivered) return;
+          const from = Math.max(state.lastDelivered + 1, index - MAX_HINT_GAP + 1);
+          const indices = Array.from({ length: index - from + 1 }, (_, offset) => from + offset);
+          const entries = await Promise.all(
+            indices.map((entryIndex) => feed.readAt(state.writer.owner, entryIndex, { writerId: state.writer.writerId }))
+          );
+          for (const entry of entries) {
+            if (entry && entry.index > state.lastDelivered) {
+              state.lastDelivered = entry.index;
+              onEntry(entry);
+            }
+          }
+        }).catch((error) => {
+          console.warn("[swarm-kit] live multi-writer feed delivery failed:", normalizeError(error).message);
+        });
+      }
+      for (const writer of writers) acceptWriter(writer);
+      if (catchUp && writers.length > 0) {
+        const existing = await feed.readLatest(writers, { limitPerWriter: catchUpLimitPerWriter });
+        const byWriter = /* @__PURE__ */ new Map();
+        for (const entry of existing) {
+          const key = writerKey(entry.owner, entry.writerId);
+          if (!byWriter.has(key)) byWriter.set(key, []);
+          byWriter.get(key).push(entry);
+        }
+        for (const [key, entries] of byWriter) {
+          const state = accepted.get(key);
+          if (state) replay(state, entries);
+        }
+      }
+      const detachHints = await hints.subscribe((message) => {
+        const hint = message.value;
+        if (!isHintForFeed(hint)) return;
+        const state = accepted.get(writerKey(hint.owner, hint.writerId));
+        if (!state) {
+          onWriterDiscovered?.({ owner: hint.owner, writerId: hint.writerId });
+          return;
+        }
+        if (hint.index <= state.lastDelivered) return;
+        enqueueDeliverThrough(state, hint.index);
+      });
+      return {
+        async addWriter(writer) {
+          const writerId = writer.writerId ?? feed.writerId;
+          if (accepted.has(writerKey(writer.owner, writerId))) return;
+          const state = acceptWriter(writer);
+          const latest = await feed.readWriter(writer.owner, { writerId, limit: catchUpLimitPerWriter });
+          replay(state, latest);
+        },
+        async unsubscribe() {
+          detachHints();
+        }
+      };
+    },
+    async close() {
+      if (ownsBus) await bus.close();
+    }
+  };
+}
+function liveMessageText(message) {
+  return bytesToUtf8(message.data);
+}
+function liveMessageJson(message) {
+  return bytesToJson(message.data);
+}
+
 // src/did.ts
 var DEFAULT_DID_NAMESPACE = "swarm-kit:did-document:v1";
 function didDocumentIdentifier(options = {}) {
@@ -4413,7 +4944,7 @@ function createDidDocumentStreamOptions(options) {
       }
       return value;
     },
-    sameEnvelope
+    sameEnvelope: sameEnvelope2
   };
 }
 function validateRevisionEnvelope(revision) {
@@ -4421,7 +4952,7 @@ function validateRevisionEnvelope(revision) {
     throw new Error("Invalid DID document revision");
   }
 }
-function sameEnvelope(a, b) {
+function sameEnvelope2(a, b) {
   return a.version === b.version && a.type === b.type && a.revision === b.revision && a.index === b.index && a.previousReference === b.previousReference && a.documentReference === b.documentReference && a.documentSize === b.documentSize && a.writtenAt === b.writtenAt;
 }
 
@@ -4854,13 +5385,13 @@ function createHashChain(provider, options) {
     entryTag: "entry",
     label: "hash chain",
     parseEnvelope: (value, context) => {
-      const envelope = parseEntryEnvelope(value, options.topic);
+      const envelope = parseEntryEnvelope2(value, options.topic);
       if (envelope.index !== context.index) {
         throw new Error(`Hash chain entry index mismatch for ${context.reference}`);
       }
       return envelope;
     },
-    sameEnvelope: sameEnvelope2
+    sameEnvelope: sameEnvelope3
   });
   async function hydrateEntry(record) {
     const payload = await readObjectJson(provider, record.envelope.payloadReference);
@@ -4877,7 +5408,7 @@ function createHashChain(provider, options) {
     if (soc.owner.toLowerCase() !== owner.toLowerCase()) {
       throw new Error(`Hash chain owner mismatch for ${reference}`);
     }
-    const envelope = parseEntryEnvelope(bytesToJson(soc.bytes), options.topic);
+    const envelope = parseEntryEnvelope2(bytesToJson(soc.bytes), options.topic);
     if (soc.identifier.toLowerCase() !== stream.entryIdentifier(envelope.index).toLowerCase()) {
       throw new Error(`Hash chain identifier mismatch for ${reference}`);
     }
@@ -4935,13 +5466,13 @@ function createHashChain(provider, options) {
     }
   };
 }
-function parseEntryEnvelope(value, topic) {
+function parseEntryEnvelope2(value, topic) {
   if (value.version !== 1 || value.type !== "swarm-kit:hash-chain-entry" || value.topic !== topic || !Number.isSafeInteger(value.index) || value.index < 0 || !(typeof value.previousReference === "string" || value.previousReference === null) || typeof value.payloadReference !== "string" || typeof value.payloadSize !== "number" || !Number.isSafeInteger(value.payloadSize) || value.payloadSize < 0 || typeof value.writtenAt !== "string") {
     throw new Error("Invalid hash chain entry");
   }
   return value;
 }
-function sameEnvelope2(a, b) {
+function sameEnvelope3(a, b) {
   return a.version === b.version && a.type === b.type && a.topic === b.topic && a.index === b.index && a.previousReference === b.previousReference && a.payloadReference === b.payloadReference && a.payloadSize === b.payloadSize && a.writtenAt === b.writtenAt;
 }
 
@@ -4963,7 +5494,7 @@ function createKeyedLookup(provider, options) {
         }
         return envelope;
       },
-      sameEnvelope: sameEnvelope3
+      sameEnvelope: sameEnvelope4
     });
   }
   async function hydrateEntry(record) {
@@ -5034,7 +5565,7 @@ function parseLookupEnvelope(value, namespace, key) {
   }
   return value;
 }
-function sameEnvelope3(a, b) {
+function sameEnvelope4(a, b) {
   return a.version === b.version && a.type === b.type && a.namespace === b.namespace && a.key === b.key && a.index === b.index && a.previousReference === b.previousReference && a.valueReference === b.valueReference && a.valueSize === b.valueSize && a.writtenAt === b.writtenAt;
 }
 function normalizeNamespace(namespace) {
@@ -5044,140 +5575,6 @@ function normalizeNamespace(namespace) {
 function normalizeKey(key) {
   if (!key.trim()) throw new Error("Keyed lookup key must not be empty");
   return key;
-}
-
-// src/multi-writer-feed.ts
-var DEFAULT_MULTI_WRITER_NAMESPACE = "swarm-kit:multi-writer-feed:v1";
-var DEFAULT_WRITER_ID = "default";
-function createMultiWriterFeed(provider, options) {
-  const namespace = options.namespace ?? DEFAULT_MULTI_WRITER_NAMESPACE;
-  const localWriterId = options.writerId ?? DEFAULT_WRITER_ID;
-  function normalizeWriterId(writerId = localWriterId) {
-    if (!writerId.trim()) throw new Error("Multi-writer feed writerId must not be empty");
-    return writerId;
-  }
-  function streamFor(writerId = localWriterId) {
-    const normalizedWriterId = normalizeWriterId(writerId);
-    return createIndexedSocStream(provider, {
-      namespace,
-      parts: [options.topic, normalizedWriterId],
-      entryTag: "entry",
-      label: "multi-writer feed",
-      parseEnvelope: (value, context) => {
-        const envelope = parseEntryEnvelope2(value, options.topic, normalizedWriterId);
-        if (envelope.index !== context.index) {
-          throw new Error(`Multi-writer feed entry index mismatch for ${context.reference}`);
-        }
-        return envelope;
-      },
-      sameEnvelope: sameEnvelope4
-    });
-  }
-  async function hydrateEntry(record) {
-    const payload = await readObjectJson(provider, record.envelope.payloadReference);
-    return {
-      ...record.envelope,
-      owner: record.soc.owner,
-      identifier: record.soc.identifier,
-      reference: record.soc.reference,
-      payload
-    };
-  }
-  async function readEntryByAddress(reference, owner, writerId) {
-    const soc = await readSocBytesByAddress(provider, reference);
-    if (soc.owner.toLowerCase() !== owner.toLowerCase()) {
-      throw new Error(`Multi-writer feed owner mismatch for ${reference}`);
-    }
-    const envelope = parseEntryEnvelope2(bytesToJson(soc.bytes), options.topic, writerId);
-    if (soc.identifier.toLowerCase() !== streamFor(writerId).entryIdentifier(envelope.index).toLowerCase()) {
-      throw new Error(`Multi-writer feed identifier mismatch for ${reference}`);
-    }
-    return hydrateEntry({ envelope, soc });
-  }
-  async function readAt(owner, index, readOptions = {}) {
-    const writerId = normalizeWriterId(readOptions.writerId);
-    const record = await streamFor(writerId).readRecord(owner, index);
-    return record ? hydrateEntry(record) : null;
-  }
-  async function readWriter(owner, readOptions = {}) {
-    const writerId = normalizeWriterId(readOptions.writerId);
-    const limit = readOptions.limit ?? 10;
-    assertIndexedSocLimit(limit, "multi-writer feed read limit");
-    if (limit === 0) return [];
-    const latest = await streamFor(writerId).readLatestRecord(owner);
-    if (!latest) return [];
-    const entries = [];
-    let current = await hydrateEntry(latest);
-    while (current && entries.length < limit) {
-      entries.push(current);
-      current = current.previousReference ? await readEntryByAddress(current.previousReference, owner, writerId) : null;
-    }
-    return entries;
-  }
-  return {
-    topic: options.topic,
-    writerId: localWriterId,
-    entryIdentifier: (index, writerId = localWriterId) => streamFor(writerId).entryIdentifier(index),
-    getOwner: streamFor(localWriterId).getOwner,
-    async append(payload, appendOptions = {}) {
-      const publishedPayload = await publishObjectJson(provider, payload);
-      const writtenAt = new Date(appendOptions.at ?? Date.now()).toISOString();
-      const appended = await streamFor(localWriterId).append(({ index, previousReference }) => ({
-        version: 1,
-        type: "swarm-kit:multi-writer-feed-entry",
-        topic: options.topic,
-        writerId: localWriterId,
-        index,
-        previousReference,
-        payloadReference: publishedPayload.reference,
-        payloadSize: publishedPayload.size,
-        writtenAt
-      }));
-      return {
-        ...appended.envelope,
-        owner: appended.owner,
-        identifier: appended.identifier,
-        reference: appended.reference,
-        payload,
-        entryWrite: appended.entryWrite
-      };
-    },
-    readAt,
-    readWriter,
-    async readLatest(writers, readOptions = {}) {
-      const limitPerWriter = readOptions.limitPerWriter ?? 10;
-      assertIndexedSocLimit(limitPerWriter, "multi-writer feed limitPerWriter");
-      if (readOptions.limit !== void 0 && (!Number.isSafeInteger(readOptions.limit) || readOptions.limit < 0)) {
-        throw new Error("Multi-writer feed limit must be a non-negative safe integer");
-      }
-      const results = await Promise.all(writers.map(
-        (writer) => readWriter(writer.owner, {
-          writerId: writer.writerId ?? localWriterId,
-          limit: limitPerWriter
-        })
-      ));
-      const merged = results.flat().sort(compareEntriesNewestFirst);
-      return readOptions.limit === void 0 ? merged : merged.slice(0, readOptions.limit);
-    }
-  };
-}
-function parseEntryEnvelope2(value, topic, writerId) {
-  if (value.version !== 1 || value.type !== "swarm-kit:multi-writer-feed-entry" || value.topic !== topic || value.writerId !== writerId || !Number.isSafeInteger(value.index) || value.index < 0 || !(typeof value.previousReference === "string" || value.previousReference === null) || typeof value.payloadReference !== "string" || typeof value.payloadSize !== "number" || !Number.isSafeInteger(value.payloadSize) || value.payloadSize < 0 || typeof value.writtenAt !== "string") {
-    throw new Error("Invalid multi-writer feed entry");
-  }
-  return value;
-}
-function sameEnvelope4(a, b) {
-  return a.version === b.version && a.type === b.type && a.topic === b.topic && a.writerId === b.writerId && a.index === b.index && a.previousReference === b.previousReference && a.payloadReference === b.payloadReference && a.payloadSize === b.payloadSize && a.writtenAt === b.writtenAt;
-}
-function compareEntriesNewestFirst(a, b) {
-  const time = Date.parse(b.writtenAt) - Date.parse(a.writtenAt);
-  if (time !== 0) return time;
-  const index = b.index - a.index;
-  if (index !== 0) return index;
-  const owner = a.owner.localeCompare(b.owner);
-  if (owner !== 0) return owner;
-  return a.writerId.localeCompare(b.writerId);
 }
 
 // src/records.ts
@@ -5695,7 +6092,7 @@ function createSwarmKit(input = getWindowSwarm()) {
   const multiWriterFeed = {
     create: (options) => createMultiWriterFeed(provider, options)
   };
-  const crypto2 = {
+  const crypto3 = {
     generateKey: generateEncryptionKey,
     exportKey: exportEncryptionKey,
     importKey: importEncryptionKey,
@@ -5743,6 +6140,16 @@ function createSwarmKit(input = getWindowSwarm()) {
     generateSalt: generateCommitRevealSalt,
     commitmentFor: commitRevealCommitment
   };
+  const live = {
+    topic: (options) => createLiveTopic(provider, options),
+    bus: (options) => createLiveBus(provider, options),
+    inbox: (options) => createLiveInbox(provider, options),
+    multiWriterFeed: (options) => createLiveMultiWriterFeed(provider, options),
+    sendToInbox: sendToInbox.bind(null, provider),
+    sendTextToInbox: sendTextToInbox.bind(null, provider),
+    sendJsonToInbox: sendJsonToInbox.bind(null, provider),
+    isInboxCard: isLiveInboxCard
+  };
   const signedDocuments = {
     sign: signDocument,
     verify: verifySignedDocument,
@@ -5773,6 +6180,10 @@ function createSwarmKit(input = getWindowSwarm()) {
       if (!provider.getCapabilities) throw new Error("Swarm driver does not support getCapabilities");
       return provider.getCapabilities();
     },
+    getMessagingIdentity: () => {
+      if (!provider.getMessagingIdentity) throw new Error("Swarm driver does not support getMessagingIdentity");
+      return provider.getMessagingIdentity();
+    },
     chunks,
     soc,
     epochFeed,
@@ -5780,11 +6191,12 @@ function createSwarmKit(input = getWindowSwarm()) {
     did,
     hashChain,
     multiWriterFeed,
-    crypto: crypto2,
+    crypto: crypto3,
     lookup,
     records,
     commitReveal,
     signedDocuments,
+    live,
     publishBytes: chunks.publishBytes,
     readBytes: chunks.readBytes,
     publishText: chunks.publishText,
@@ -6130,6 +6542,7 @@ var DEFAULT_SUITES = [
   "feed",
   "indexed-soc",
   "primitives",
+  "messaging",
   "diagnostics"
 ];
 var DEFAULT_OPTIONS2 = {
@@ -7164,6 +7577,7 @@ ${"payload-".repeat(800)}`;
         };
       }
     },
+    ...createMessagingCases().map(messagingCase),
     {
       id: "stress-soc-sequential",
       suite: "stress",
@@ -7227,6 +7641,16 @@ async function runTestCase(testCase, context) {
   }
   try {
     const details = await testCase.run(context);
+    if (isSkip(details)) {
+      return {
+        id: testCase.id,
+        suite: testCase.suite,
+        label: testCase.label,
+        status: "skip",
+        durationMs: elapsed2(started),
+        details: details.details
+      };
+    }
     if (isWarning(details)) {
       return {
         id: testCase.id,
@@ -7294,18 +7718,347 @@ async function fetchJsonWithTimeout(url, timeoutMs = 12e3) {
     clearTimeout(timeout);
   }
 }
-async function expectProviderReason2(action, expectedReason) {
+function createMessagingCases() {
+  return [
+    {
+      id: "messaging-feature-detection",
+      label: "Capabilities advertise messaging feature and limits pre-grant",
+      run: async (context) => {
+        const capabilities = await callSwarm(context.provider, "swarm_getCapabilities");
+        context.capabilities = capabilities;
+        const supported = hasMessagingFeature(capabilities);
+        context.messaging = { supported };
+        if (!supported) {
+          return { warning: true, details: "Provider does not advertise the messaging feature \u2014 remaining messaging checks are skipped." };
+        }
+        assertCondition(typeof capabilities.limits?.maxMessageBytes === "number", "limits.maxMessageBytes must be a number");
+        assertCondition(typeof capabilities.limits?.maxTargetDepth === "number", "limits.maxTargetDepth must be a number");
+        assertCondition(typeof capabilities.limits?.maxSubscriptions === "number", "limits.maxSubscriptions must be a number");
+        return {
+          features: capabilities.features,
+          maxMessageBytes: capabilities.limits.maxMessageBytes,
+          maxTargetDepth: capabilities.limits.maxTargetDepth,
+          maxSubscriptions: capabilities.limits.maxSubscriptions
+        };
+      }
+    },
+    {
+      id: "messaging-identity-shape",
+      label: "Messaging identity: compressed key + truncated pssTarget (never the overlay)",
+      run: async (context) => {
+        const identity = await callSwarm(context.provider, "swarm_getMessagingIdentity");
+        assertCondition(/^0[23][0-9a-fA-F]{64}$/.test(identity.pssPublicKey), "pssPublicKey must be a 66-char compressed secp256k1 key");
+        assertCondition(/^([0-9a-fA-F]{2})+$/.test(identity.pssTarget), "pssTarget must be whole bytes of hex");
+        const maxTargetDepth = context.capabilities?.limits?.maxTargetDepth ?? 3;
+        assertCondition(identity.pssTarget.length / 2 <= maxTargetDepth, `pssTarget must be at most ${maxTargetDepth} bytes`);
+        assertCondition(identity.pssTarget.length < 64, "pssTarget must be a truncated prefix, never the full 32-byte overlay");
+        assertCondition(typeof identity.identityMode === "string" && identity.identityMode.length > 0, "identityMode must be a non-empty string");
+        context.messaging = { supported: true, identity };
+        return { pssPublicKey: identity.pssPublicKey, pssTargetBytes: identity.pssTarget.length / 2, identityMode: identity.identityMode };
+      }
+    },
+    {
+      id: "messaging-subscribe-param-validation",
+      label: "Subscribe rejects invalid kind and topic/address misuse",
+      run: async (context) => {
+        return {
+          invalidKind: await expectProviderReason2(
+            () => callSwarm(context.provider, "swarm_subscribe", { kind: "feed", topic: "t" }),
+            "invalid_kind"
+          ),
+          gsocTopicAndAddress: await expectProviderError(
+            () => callSwarm(context.provider, "swarm_subscribe", { kind: "gsoc", topic: "t", address: "ab".repeat(32) }),
+            { code: -32602 }
+          ),
+          gsocBadAddress: await expectProviderReason2(
+            () => callSwarm(context.provider, "swarm_subscribe", { kind: "gsoc", address: "not-hex" }),
+            "invalid_address"
+          ),
+          pssWithAddress: await expectProviderError(
+            () => callSwarm(context.provider, "swarm_subscribe", { kind: "pss", address: "ab".repeat(32) }),
+            { code: -32602 }
+          )
+        };
+      }
+    },
+    {
+      id: "messaging-sendpss-param-validation",
+      label: "sendPss rejects bad recipients and targets",
+      run: async (context) => {
+        const valid = { topic: "t", recipient: `02${"ab".repeat(32)}`, targets: "aabb", data: "x" };
+        return {
+          badRecipient: await expectProviderReason2(
+            () => callSwarm(context.provider, "swarm_sendPss", { ...valid, recipient: "zz" }),
+            "invalid_recipient"
+          ),
+          missingTargets: await expectProviderReason2(
+            () => callSwarm(context.provider, "swarm_sendPss", { topic: valid.topic, recipient: valid.recipient, data: "x" }),
+            "invalid_target"
+          ),
+          oversizedTargets: await expectProviderReason2(
+            () => callSwarm(context.provider, "swarm_sendPss", { ...valid, targets: "aabbccdd" }),
+            "invalid_target"
+          )
+        };
+      }
+    },
+    {
+      id: "messaging-sendgsoc-raw-address-rejected",
+      label: "sendGsoc rejects the raw address variant (nothing to sign with)",
+      run: async (context) => {
+        return expectProviderReason2(
+          () => callSwarm(context.provider, "swarm_sendGsoc", { address: "ab".repeat(32), data: "x" }),
+          "invalid_address"
+        );
+      }
+    },
+    {
+      id: "messaging-empty-payload-bounds",
+      label: "Empty payload: rejected for GSOC (invalid_payload), accepted for PSS",
+      run: async (context) => {
+        const emptyGsoc = await expectProviderReason2(
+          () => callSwarm(context.provider, "swarm_sendGsoc", { topic: messagingTopic(context, "empty"), data: "" }),
+          "invalid_payload"
+        );
+        const identity = await requireMessagingIdentity(context);
+        const emptyPss = await callSwarm(context.provider, "swarm_sendPss", {
+          topic: messagingTopic(context, "empty-pss"),
+          recipient: identity.pssPublicKey,
+          targets: identity.pssTarget,
+          data: ""
+        });
+        assertEqual(emptyPss.sent, true, "empty PSS send accepted");
+        return { emptyGsoc, emptyPss };
+      }
+    },
+    {
+      id: "messaging-payload-too-large",
+      label: "Oversized message rejected with payload_too_large",
+      run: async (context) => {
+        const limit = context.capabilities?.limits?.maxMessageBytes ?? 4e3;
+        return expectProviderReason2(
+          () => callSwarm(context.provider, "swarm_sendGsoc", {
+            topic: messagingTopic(context, "oversize"),
+            data: "x".repeat(limit + 1)
+          }),
+          "payload_too_large"
+        );
+      }
+    },
+    {
+      id: "messaging-subscription-lifecycle",
+      label: "Subscribe/unsubscribe lifecycle and subscription_not_found",
+      run: async (context) => {
+        const subscription = await callSwarm(context.provider, "swarm_subscribe", {
+          kind: "gsoc",
+          topic: messagingTopic(context, "lifecycle")
+        });
+        assertCondition(typeof subscription.subscriptionId === "string" && subscription.subscriptionId.length > 0, "subscriptionId must be a non-empty string");
+        assertEqual(subscription.kind, "gsoc", "subscription kind");
+        assertHex2(subscription.key, 32, "subscription key");
+        const unsubscribed = await callSwarm(context.provider, "swarm_unsubscribe", {
+          subscriptionId: subscription.subscriptionId
+        });
+        assertEqual(unsubscribed.unsubscribed, true, "unsubscribe result");
+        const notFound = await expectProviderReason2(
+          () => callSwarm(context.provider, "swarm_unsubscribe", { subscriptionId: "nonexistent-subscription" }),
+          "subscription_not_found"
+        );
+        return { subscription, notFound };
+      }
+    },
+    {
+      id: "messaging-per-origin-cap",
+      label: "Per-origin subscription cap returns too_many_subscriptions (-32602)",
+      run: async (context) => {
+        const cap = context.capabilities?.limits?.maxSubscriptions ?? 32;
+        if (cap > 40) {
+          return { warning: true, details: `maxSubscriptions is ${cap}; skipping cap exhaustion to keep the run bounded.` };
+        }
+        const topic = messagingTopic(context, "cap");
+        const opened = [];
+        try {
+          for (let index = 0; index < cap; index += 1) {
+            const subscription = await callSwarm(context.provider, "swarm_subscribe", { kind: "gsoc", topic });
+            opened.push(subscription.subscriptionId);
+          }
+          const capError = await expectProviderError(
+            () => callSwarm(context.provider, "swarm_subscribe", { kind: "gsoc", topic }),
+            { reason: "too_many_subscriptions", code: -32602 }
+          );
+          return { cap, capError };
+        } finally {
+          for (const subscriptionId of opened) {
+            await callSwarm(context.provider, "swarm_unsubscribe", { subscriptionId }).catch(() => void 0);
+          }
+        }
+      }
+    },
+    {
+      id: "messaging-gsoc-roundtrip",
+      label: "GSOC round-trip: send address matches subscribe key; message event delivers",
+      run: async (context) => {
+        const driver = context.kit.driver;
+        if (!driverSupportsMessaging(driver)) {
+          return { warning: true, details: "Provider has no event surface (on/removeListener); cannot observe deliveries." };
+        }
+        const topic = messagingTopic(context, "gsoc-roundtrip");
+        const payload = `test-center gsoc ${context.runId}`;
+        const subscription = await driver.subscribe({ kind: "gsoc", topic });
+        try {
+          const delivery = waitForSubscriptionMessage(driver, subscription.subscriptionId, MESSAGING_ROUNDTRIP_TIMEOUT_MS);
+          const sent = await callSwarm(context.provider, "swarm_sendGsoc", { topic, data: payload });
+          assertSameLower2(sent.address, subscription.key, "sendGsoc address vs subscribe key");
+          const message = await delivery;
+          if (!message) {
+            return {
+              warning: true,
+              details: `Send accepted and address matched, but no delivery within ${MESSAGING_ROUNDTRIP_TIMEOUT_MS / 1e3}s \u2014 network-dependent; retry on a well-connected node.`
+            };
+          }
+          assertEqual(bytesToUtf8(message.data), payload, "delivered GSOC payload");
+          assertEqual(message.kind, "gsoc", "delivered kind");
+          assertSameLower2(message.key, subscription.key, "delivered key");
+          await driver.unsubscribe(subscription.subscriptionId);
+          const afterUnsubscribe = waitForSubscriptionMessage(driver, subscription.subscriptionId, 5e3);
+          await callSwarm(context.provider, "swarm_sendGsoc", { topic, data: `${payload} after-unsubscribe` });
+          assertEqual(await afterUnsubscribe, null, "no delivery after unsubscribe");
+          return { key: subscription.key, deliveredAt: message.receivedAt };
+        } finally {
+          await driver.unsubscribe(subscription.subscriptionId).catch(() => void 0);
+        }
+      }
+    },
+    {
+      id: "messaging-pss-roundtrip",
+      label: "PSS round-trip: encrypted send to own identity delivers decrypted",
+      run: async (context) => {
+        const driver = context.kit.driver;
+        if (!driverSupportsMessaging(driver)) {
+          return { warning: true, details: "Provider has no event surface (on/removeListener); cannot observe deliveries." };
+        }
+        const identity = await requireMessagingIdentity(context);
+        const topic = messagingTopic(context, "pss-roundtrip");
+        const payload = `test-center pss ${context.runId}`;
+        const subscription = await driver.subscribe({ kind: "pss", topic });
+        try {
+          const delivery = waitForSubscriptionMessage(driver, subscription.subscriptionId, MESSAGING_ROUNDTRIP_TIMEOUT_MS);
+          await callSwarm(context.provider, "swarm_sendPss", {
+            topic,
+            recipient: identity.pssPublicKey,
+            targets: identity.pssTarget,
+            data: payload
+          });
+          const message = await delivery;
+          if (!message) {
+            return {
+              warning: true,
+              details: `Send accepted, but no delivery within ${MESSAGING_ROUNDTRIP_TIMEOUT_MS / 1e3}s \u2014 network-dependent; retry on a well-connected node.`
+            };
+          }
+          assertEqual(bytesToUtf8(message.data), payload, "delivered PSS payload");
+          assertEqual(message.kind, "pss", "delivered kind");
+          return { key: subscription.key, deliveredAt: message.receivedAt };
+        } finally {
+          await driver.unsubscribe(subscription.subscriptionId).catch(() => void 0);
+        }
+      }
+    },
+    {
+      id: "messaging-node-capacity-distinction",
+      label: "Node pipeline exhaustion is a retryable 4900, not too_many_subscriptions",
+      run: async (context) => {
+        const opened = [];
+        try {
+          for (let index = 0; index < 10; index += 1) {
+            try {
+              const subscription = await callSwarm(context.provider, "swarm_subscribe", {
+                kind: "gsoc",
+                topic: messagingTopic(context, `capacity-${index}`)
+              });
+              opened.push(subscription.subscriptionId);
+            } catch (error) {
+              const providerError = error;
+              assertEqual(providerError.code, 4900, "node capacity error code");
+              assertCondition(
+                getSwarmErrorReason(error) !== "too_many_subscriptions",
+                "node capacity exhaustion must not masquerade as the per-origin cap"
+              );
+              return { refusedAfter: opened.length, error: serializeProviderTestError(error) };
+            }
+          }
+          return {
+            warning: true,
+            details: `No node-capacity refusal within ${opened.length} distinct-topic subscriptions (pool larger than probed, or other slots free).`
+          };
+        } finally {
+          for (const subscriptionId of opened) {
+            await callSwarm(context.provider, "swarm_unsubscribe", { subscriptionId }).catch(() => void 0);
+          }
+        }
+      }
+    }
+  ];
+}
+var MESSAGING_ROUNDTRIP_TIMEOUT_MS = 12e4;
+function messagingCase(testCase) {
+  return {
+    ...testCase,
+    suite: "messaging",
+    run: async (context) => {
+      if (context.messaging?.supported === false) {
+        return { skipped: true, details: "Provider does not advertise the messaging feature." };
+      }
+      return testCase.run(context);
+    }
+  };
+}
+function messagingTopic(context, label) {
+  return `swarm-kit:test-center:messaging:${context.runId}:${label}`;
+}
+async function requireMessagingIdentity(context) {
+  if (context.messaging?.identity) return context.messaging.identity;
+  const identity = await callSwarm(context.provider, "swarm_getMessagingIdentity");
+  context.messaging = { supported: true, identity };
+  return identity;
+}
+function waitForSubscriptionMessage(driver, subscriptionId, timeoutMs) {
+  return new Promise((resolve) => {
+    const detach = driver.onSubscriptionMessage((message) => {
+      if (message.subscriptionId !== subscriptionId) return;
+      cleanup();
+      resolve(message);
+    });
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve(null);
+    }, timeoutMs);
+    function cleanup() {
+      clearTimeout(timer);
+      detach();
+    }
+  });
+}
+async function expectProviderError(action, expected) {
+  const label = [
+    expected.reason !== void 0 ? `reason "${expected.reason}"` : null,
+    expected.code !== void 0 ? `code ${expected.code}` : null
+  ].filter(Boolean).join(" and ");
   try {
     const value = await action();
-    throw new Error(`Expected provider error ${expectedReason}, but call resolved with ${JSON.stringify(summarizeValue2(value))}`);
+    throw new Error(`Expected provider error with ${label}, but call resolved with ${JSON.stringify(summarizeValue2(value))}`);
   } catch (error) {
     const reason = getSwarmErrorReason(error);
-    if (reason !== expectedReason) {
+    const code = error.code;
+    if (expected.reason !== void 0 && reason !== expected.reason || expected.code !== void 0 && code !== expected.code) {
       const serialized = serializeProviderTestError(error);
-      throw new Error(`Expected provider reason "${expectedReason}", received "${reason ?? "none"}": ${serialized.message}`);
+      throw new Error(`Expected provider error with ${label}, received reason "${reason ?? "none"}" code ${code ?? "none"}: ${serialized.message}`);
     }
     return serializeProviderTestError(error);
   }
+}
+async function expectProviderReason2(action, expectedReason) {
+  return expectProviderError(action, { reason: expectedReason });
 }
 function createTestIndexedStream(context) {
   return createIndexedSocStream(context.provider, {
@@ -7561,6 +8314,9 @@ function isRecord(value) {
 function isWarning(value) {
   return Boolean(value && typeof value === "object" && value.warning === true);
 }
+function isSkip(value) {
+  return Boolean(value && typeof value === "object" && value.skipped === true);
+}
 function now2() {
   return globalThis.performance?.now?.() ?? Date.now();
 }
@@ -7596,6 +8352,10 @@ export {
   createHashChain,
   createIndexedSocStream,
   createKeyedLookup,
+  createLiveBus,
+  createLiveInbox,
+  createLiveMultiWriterFeed,
+  createLiveTopic,
   createMultiWriterFeed,
   createOwnerRecords,
   createP256DocumentSigner,
@@ -7613,6 +8373,7 @@ export {
   detectWindowSwarm,
   didDocumentIdentifier,
   didDocumentRevisionIdentifier,
+  driverSupportsMessaging,
   encryptBytes,
   encryptBytesFor,
   encryptJson,
@@ -7632,16 +8393,20 @@ export {
   getSigningIdentity,
   getSwarmErrorReason,
   getWindowSwarm,
+  hasMessagingFeature,
   hexToBytes,
   importEncryptionKey,
   importP256PrivateSigningKey,
   importP256PublicSigningKey,
   importPrivateEncryptionKey,
   importPublicEncryptionKey,
+  isLiveInboxCard,
   isSwarmKitDriver,
   isSwarmReason,
   jsonToBytes,
   keccakHex,
+  liveMessageJson,
+  liveMessageText,
   normalizeBytes,
   normalizeDriverBytes,
   normalizeError,
@@ -7683,6 +8448,9 @@ export {
   readText,
   runSwarmProviderCompliance,
   runSwarmProviderTestCenter,
+  sendJsonToInbox,
+  sendTextToInbox,
+  sendToInbox,
   signDocument,
   signedDocumentPayloadBytes,
   toSwarmKitDriver,

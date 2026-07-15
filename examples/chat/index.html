@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Swarm Kit Live Chat</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --panel: #ffffff;
+      --border: #d5d9e0;
+      --muted: #5c6470;
+      --accent: #4a5568;
+      --mine: #eef2ff;
+      --theirs: #f4f5f7;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --panel: #16181d;
+        --border: #2c313a;
+        --muted: #98a1ad;
+        --accent: #aab4c4;
+        --mine: #1f2a44;
+        --theirs: #1e2128;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+      background: light-dark(#f1f3f6, #0d0f12);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    header {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    header h1 { font-size: 15px; margin: 0 12px 0 0; }
+    header .status { color: var(--muted); font-size: 12px; }
+    main { flex: 1; display: flex; min-height: 0; }
+    .sidebar {
+      width: 220px;
+      border-right: 1px solid var(--border);
+      background: var(--panel);
+      padding: 12px;
+      overflow-y: auto;
+    }
+    .sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 8px; }
+    .peer {
+      padding: 6px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .peer:hover { background: var(--theirs); }
+    .peer.active { background: var(--mine); }
+    .peer .badge { color: var(--accent); font-size: 11px; }
+    .chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+    .msg { max-width: 70%; padding: 7px 11px; border-radius: 10px; background: var(--theirs); overflow-wrap: anywhere; }
+    .msg.mine { align-self: flex-end; background: var(--mine); }
+    .msg .meta { font-size: 11px; color: var(--muted); margin-bottom: 2px; display: flex; gap: 6px; }
+    .composer { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--panel); }
+    .composer input { flex: 1; }
+    input, button {
+      font: inherit;
+      padding: 7px 10px;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: inherit;
+    }
+    button { cursor: pointer; }
+    button.primary { background: var(--accent); color: light-dark(#fff, #101216); border-color: var(--accent); }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .join {
+      margin: auto;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      width: min(420px, 90vw);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .join h2 { margin: 0 0 4px; font-size: 16px; }
+    .join p { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+    .hidden { display: none !important; }
+    .note { font-size: 12px; color: var(--muted); padding: 4px 16px 10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Swarm Kit Live Chat</h1>
+    <span class="status" id="status">detecting window.swarm…</span>
+  </header>
+
+  <main>
+    <div class="join" id="join-panel">
+      <h2>Join a room</h2>
+      <p>
+        Durable history lives in a multi-writer feed on Swarm; live delivery
+        rides GSOC messaging hints. DMs travel encrypted over PSS. Open the
+        same room in a second Freedom profile (its own node and identity) to
+        chat across the network.
+      </p>
+      <input id="join-name" placeholder="Display name" maxlength="32">
+      <input id="join-room" placeholder="Room" value="lobby" maxlength="64">
+      <button class="primary" id="join-button" disabled>Join</button>
+    </div>
+
+    <div class="sidebar hidden" id="sidebar">
+      <h2>Room</h2>
+      <div class="peer" id="room-tab"><span id="room-label">#lobby</span></div>
+      <h2 style="margin-top:14px">Peers (DM)</h2>
+      <div id="peer-list"></div>
+    </div>
+
+    <div class="chat hidden" id="chat-panel">
+      <div class="messages" id="messages"></div>
+      <div class="note" id="chat-note"></div>
+      <div class="composer">
+        <input id="composer-input" placeholder="Message #lobby" autocomplete="off">
+        <button class="primary" id="send-button">Send</button>
+      </div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { bytesToHex, createSwarmKit, hasMessagingFeature, liveMessageJson, waitForSwarm } from './swarm-kit.js';
+
+    const $ = (id) => document.getElementById(id);
+    const state = {
+      kit: null,
+      name: '',
+      room: '',
+      writerId: null,
+      owner: null,
+      feed: null,
+      feedSub: null,
+      bus: null,
+      inbox: null,
+      card: null,
+      // key `${owner}:${writerId}` -> { name, card, owner, writerId }
+      peers: new Map(),
+      // room message dedupe: `${owner}:${writerId}:${index}`
+      seen: new Set(),
+      roomMessages: [],
+      dms: new Map(), // peerKey -> [{ name, text, at, mine }]
+      view: 'room',   // 'room' | peerKey
+      announcedAt: 0,
+    };
+
+    const peerKey = (owner, writerId) => `${owner.toLowerCase()}:${writerId}`;
+
+    function setStatus(text) { $('status').textContent = text; }
+
+    function stableWriterId() {
+      let id = localStorage.getItem('swarm-kit-chat:writer-id');
+      if (!id) {
+        id = bytesToHex(crypto.getRandomValues(new Uint8Array(6)));
+        localStorage.setItem('swarm-kit-chat:writer-id', id);
+      }
+      return id;
+    }
+
+    async function boot() {
+      try {
+        const provider = await waitForSwarm({ requireFreedomBrowser: true, timeoutMs: 10000 });
+        state.kit = createSwarmKit(provider);
+        const capabilities = await state.kit.getCapabilities();
+        if (!hasMessagingFeature(capabilities)) {
+          setStatus('provider found, but it does not support messaging');
+          return;
+        }
+        setStatus('provider ready — messaging supported');
+        $('join-button').disabled = false;
+      } catch {
+        setStatus('window.swarm not found — open this page in Freedom Browser');
+      }
+    }
+
+    $('join-button').onclick = () => join().catch(showError);
+    $('send-button').onclick = () => send().catch(showError);
+    $('composer-input').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') send().catch(showError);
+    });
+    $('room-tab').onclick = () => switchView('room');
+
+    function showError(error) {
+      const reason = error?.data?.reason ? ` (${error.data.reason})` : '';
+      setStatus(`error: ${error?.message || error}${reason}`);
+      console.error(error);
+    }
+
+    async function join() {
+      const name = $('join-name').value.trim();
+      const room = $('join-room').value.trim().toLowerCase();
+      if (!name || !room) return;
+      $('join-button').disabled = true;
+      setStatus('connecting…');
+
+      const kit = state.kit;
+      await kit.requestAccess();
+
+      state.name = name;
+      state.room = room;
+      state.writerId = stableWriterId();
+
+      // One bus per room: the hint channel and presence share a single
+      // GSOC subscription (one node pipeline).
+      state.bus = kit.live.bus({ topic: `swarm-kit:chat-bus/v1:${room}` });
+      state.feed = kit.live.multiWriterFeed({
+        topic: `swarm-kit:chat/v1:${room}`,
+        writerId: state.writerId,
+        bus: state.bus,
+      });
+      state.owner = await state.feed.feed.getOwner();
+
+      setStatus('loading history…');
+      state.feedSub = await state.feed.subscribe({
+        writers: [{ owner: state.owner, writerId: state.writerId }],
+        onEntry: (entry) => addRoomMessage(entry),
+        // Demo policy: an open room — accept every writer we hear about.
+        onWriterDiscovered: (writer) => {
+          state.feedSub.addWriter(writer).catch(showError);
+        },
+      });
+
+      // Encrypted DMs: PSS inbox + shareable card via presence.
+      state.inbox = kit.live.inbox({ topic: `swarm-kit:chat-dm/v1` });
+      state.card = await state.inbox.card();
+      await state.inbox.subscribe((message) => {
+        try {
+          const dm = liveMessageJson(message);
+          if (dm?.protocol !== 'swarm-kit:chat-dm/v1') return;
+          addDm(peerKey(dm.owner, dm.writerId), { name: dm.name, text: dm.text, at: dm.at, mine: false });
+          notePeer(dm.owner, dm.writerId, dm.name, dm.card);
+        } catch { /* not a chat DM */ }
+      });
+
+      const presence = state.bus.channel('presence');
+      await presence.subscribe((message) => {
+        const peer = message.value;
+        if (!peer || peer.owner === state.owner) return;
+        const isNew = !state.peers.has(peerKey(peer.owner, peer.writerId));
+        notePeer(peer.owner, peer.writerId, peer.name, peer.card);
+        // Answer a newcomer so they learn about us (throttled).
+        if (isNew && Date.now() - state.announcedAt > 15000) announce();
+      });
+      await announce();
+
+      async function announce() {
+        state.announcedAt = Date.now();
+        await presence.send({
+          name: state.name,
+          owner: state.owner,
+          writerId: state.writerId,
+          card: state.card,
+        });
+      }
+
+      $('join-panel').classList.add('hidden');
+      $('sidebar').classList.remove('hidden');
+      $('chat-panel').classList.remove('hidden');
+      $('room-label').textContent = `#${room}`;
+      $('composer-input').placeholder = `Message #${room}`;
+      setStatus(`joined #${room} as ${name} — ${state.owner.slice(0, 10)}…`);
+      $('chat-note').textContent =
+        'Room messages are durable feed entries (signed by each writer’s owner key); delivery hints and presence are best-effort GSOC. DMs are PSS-encrypted.';
+      window.addEventListener('pagehide', cleanup);
+    }
+
+    function cleanup() {
+      state.feedSub?.unsubscribe().catch(() => {});
+      state.bus?.close().catch(() => {});
+      state.feed?.close().catch(() => {});
+    }
+
+    function notePeer(owner, writerId, name, card) {
+      const key = peerKey(owner, writerId);
+      const existing = state.peers.get(key);
+      const next = { owner, writerId, name: name || existing?.name || 'peer', card: card ?? existing?.card };
+      if (existing && existing.name === next.name && existing.card === next.card) return;
+      state.peers.set(key, next);
+      renderPeers();
+    }
+
+    function addRoomMessage(entry) {
+      const key = `${entry.owner.toLowerCase()}:${entry.writerId}:${entry.index}`;
+      if (state.seen.has(key)) return;
+      state.seen.add(key);
+      const payload = entry.payload || {};
+      const message = {
+        name: payload.name || 'peer',
+        text: payload.text || '',
+        at: Date.parse(entry.writtenAt) || Date.now(),
+        mine: entry.owner.toLowerCase() === state.owner.toLowerCase() && entry.writerId === state.writerId,
+      };
+      // Entries arrive mostly in order; only re-sort on the exception.
+      const last = state.roomMessages[state.roomMessages.length - 1];
+      state.roomMessages.push(message);
+      if (last && message.at < last.at) state.roomMessages.sort((a, b) => a.at - b.at);
+      notePeer(entry.owner, entry.writerId, payload.name);
+      if (state.view === 'room') renderMessages();
+    }
+
+    function addDm(key, message) {
+      if (!state.dms.has(key)) state.dms.set(key, []);
+      state.dms.get(key).push(message);
+      if (state.view === key) renderMessages();
+      renderPeers();
+    }
+
+    async function send() {
+      const input = $('composer-input');
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = '';
+      if (state.view === 'room') {
+        await state.feed.append({ name: state.name, text });
+      } else {
+        const peer = state.peers.get(state.view);
+        if (!peer?.card) throw new Error('Peer has not shared a DM card yet');
+        const at = Date.now();
+        await state.kit.live.sendJsonToInbox(peer.card, {
+          protocol: 'swarm-kit:chat-dm/v1',
+          name: state.name,
+          owner: state.owner,
+          writerId: state.writerId,
+          card: state.card,
+          text,
+          at,
+        });
+        addDm(state.view, { name: state.name, text, at, mine: true });
+      }
+    }
+
+    function switchView(view) {
+      state.view = view;
+      renderPeers();
+      renderMessages();
+      const peer = view === 'room' ? null : state.peers.get(view);
+      $('composer-input').placeholder = peer ? `DM ${peer.name} (encrypted)` : `Message #${state.room}`;
+    }
+
+    function renderPeers() {
+      $('room-tab').classList.toggle('active', state.view === 'room');
+      const list = $('peer-list');
+      list.textContent = '';
+      for (const [key, peer] of state.peers) {
+        const element = document.createElement('div');
+        element.className = `peer${state.view === key ? ' active' : ''}`;
+        const label = document.createElement('span');
+        label.textContent = peer.name;
+        element.appendChild(label);
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = peer.card ? 'DM' : '';
+        element.appendChild(badge);
+        element.onclick = () => switchView(key);
+        list.appendChild(element);
+      }
+    }
+
+    function renderMessages() {
+      const container = $('messages');
+      container.textContent = '';
+      const messages = state.view === 'room' ? state.roomMessages : (state.dms.get(state.view) ?? []);
+      for (const message of messages) {
+        const element = document.createElement('div');
+        element.className = `msg${message.mine ? ' mine' : ''}`;
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = `${message.name} · ${new Date(message.at).toLocaleTimeString()}`;
+        element.appendChild(meta);
+        const body = document.createElement('div');
+        body.textContent = message.text;
+        element.appendChild(body);
+        container.appendChild(element);
+      }
+      container.scrollTop = container.scrollHeight;
+    }
+
+    boot();
+  </script>
+</body>
+</html>
