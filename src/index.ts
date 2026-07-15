@@ -11,6 +11,7 @@ export * from './errors.js';
 export * from './hash-chain.js';
 export * from './identifiers.js';
 export * from './indexed-soc.js';
+export * from './live.js';
 export * from './lookup.js';
 export * from './multi-writer-feed.js';
 export * from './objects.js';

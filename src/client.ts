@@ -1,5 +1,15 @@
 import { publishBytes, publishJson, publishText, readBytes, readJson, readText } from './chunks.js';
 import { commitRevealCommitment, createCommitReveal, generateCommitRevealSalt } from './commit-reveal.js';
+import {
+  createLiveBus,
+  createLiveInbox,
+  createLiveMultiWriterFeed,
+  createLiveTopic,
+  isLiveInboxCard,
+  sendJsonToInbox,
+  sendTextToInbox,
+  sendToInbox,
+} from './live.js';
 import { createDidDocument, didDocumentIdentifier, didDocumentRevisionIdentifier, readDidDocument, writeDidDocument } from './did.js';
 import {
   decryptBytes,
@@ -172,6 +182,17 @@ export function createSwarmKit(input: SwarmKitDriverInput = getWindowSwarm()) {
     generateSalt: generateCommitRevealSalt,
     commitmentFor: commitRevealCommitment,
   };
+  const live = {
+    topic: (options: Parameters<typeof createLiveTopic>[1]) => createLiveTopic(provider, options),
+    bus: (options: Parameters<typeof createLiveBus>[1]) => createLiveBus(provider, options),
+    inbox: (options?: Parameters<typeof createLiveInbox>[1]) => createLiveInbox(provider, options),
+    multiWriterFeed: <T = unknown>(options: Parameters<typeof createLiveMultiWriterFeed<T>>[1]) =>
+      createLiveMultiWriterFeed<T>(provider, options),
+    sendToInbox: sendToInbox.bind(null, provider),
+    sendTextToInbox: sendTextToInbox.bind(null, provider),
+    sendJsonToInbox: sendJsonToInbox.bind(null, provider),
+    isInboxCard: isLiveInboxCard,
+  };
   const signedDocuments = {
     sign: signDocument,
     verify: verifySignedDocument,
@@ -203,6 +224,10 @@ export function createSwarmKit(input: SwarmKitDriverInput = getWindowSwarm()) {
       if (!provider.getCapabilities) throw new Error('Swarm driver does not support getCapabilities');
       return provider.getCapabilities();
     },
+    getMessagingIdentity: () => {
+      if (!provider.getMessagingIdentity) throw new Error('Swarm driver does not support getMessagingIdentity');
+      return provider.getMessagingIdentity();
+    },
     chunks,
     soc,
     epochFeed,
@@ -215,6 +240,7 @@ export function createSwarmKit(input: SwarmKitDriverInput = getWindowSwarm()) {
     records,
     commitReveal,
     signedDocuments,
+    live,
     publishBytes: chunks.publishBytes,
     readBytes: chunks.readBytes,
     publishText: chunks.publishText,

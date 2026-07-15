@@ -13,13 +13,21 @@ export interface SwarmCapabilities {
   specVersion?: string;
   canPublish: boolean;
   reason: string | null;
+  features?: string[];
   limits?: {
     maxDataBytes?: number;
     maxFilesBytes?: number;
     maxFileCount?: number;
     maxPathBytes?: number;
     maxChunkPayloadBytes?: number;
+    maxMessageBytes?: number;
+    maxTargetDepth?: number;
+    maxSubscriptions?: number;
   };
+}
+
+export function hasMessagingFeature(capabilities: SwarmCapabilities | undefined): boolean {
+  return capabilities?.features?.includes('messaging') === true;
 }
 
 export interface SwarmChunkReadResult {
@@ -83,6 +91,46 @@ export interface SwarmReadFeedEntryResult {
   nextIndex: number | null;
 }
 
+export type SwarmSubscriptionKind = 'gsoc' | 'pss';
+
+export interface SwarmMessagingIdentity {
+  pssPublicKey: string;
+  pssTarget: string;
+  identityMode?: string;
+}
+
+export interface SwarmSubscribeResult {
+  subscriptionId: string;
+  kind: SwarmSubscriptionKind;
+  key: string;
+}
+
+export interface SwarmUnsubscribeResult {
+  unsubscribed: boolean;
+}
+
+export interface SwarmSendPssResult {
+  sent: boolean;
+}
+
+export interface SwarmSendGsocResult {
+  sent: boolean;
+  address: string;
+}
+
+/** The `message` event payload defined by the messaging extension SWIP. */
+export interface SwarmSubscriptionMessage {
+  type: 'swarm_subscription';
+  subscription: string;
+  result: {
+    kind: SwarmSubscriptionKind;
+    key: string;
+    data: string;
+    encoding: 'base64';
+    receivedAt: number;
+  };
+}
+
 export interface SwarmFeedRecord {
   name: string;
   owner: string;
@@ -111,6 +159,13 @@ export interface SwarmProvider {
   writeSingleOwnerChunk?: (params: { identifier: string; data: string | Uint8Array | ArrayBuffer; span?: number | bigint }) => Promise<SwarmWriteSingleOwnerChunkResult>;
   readSingleOwnerChunk?: (params: { address: string } | { owner: string; identifier: string }) => Promise<SwarmReadSingleOwnerChunkResult>;
   getSigningIdentity?: () => Promise<SwarmSigningIdentity>;
+  getMessagingIdentity?: () => Promise<SwarmMessagingIdentity>;
+  subscribe?: (params: { kind: SwarmSubscriptionKind; topic?: string; address?: string }) => Promise<SwarmSubscribeResult>;
+  unsubscribe?: (params: { subscriptionId: string }) => Promise<SwarmUnsubscribeResult>;
+  sendPss?: (params: { topic: string; recipient: string; targets: string; data: string | Uint8Array | ArrayBuffer }) => Promise<SwarmSendPssResult>;
+  sendGsoc?: (params: { topic: string; data: string | Uint8Array | ArrayBuffer }) => Promise<SwarmSendGsocResult>;
+  on?: (event: string, handler: (data: unknown) => void) => unknown;
+  removeListener?: (event: string, handler: (data: unknown) => void) => unknown;
 }
 
 export interface DetectWindowSwarmOptions {
@@ -185,6 +240,11 @@ function directMethodName(method: string): keyof SwarmProvider | null {
     case 'swarm_writeSingleOwnerChunk': return 'writeSingleOwnerChunk';
     case 'swarm_readSingleOwnerChunk': return 'readSingleOwnerChunk';
     case 'swarm_getSigningIdentity': return 'getSigningIdentity';
+    case 'swarm_getMessagingIdentity': return 'getMessagingIdentity';
+    case 'swarm_subscribe': return 'subscribe';
+    case 'swarm_unsubscribe': return 'unsubscribe';
+    case 'swarm_sendPss': return 'sendPss';
+    case 'swarm_sendGsoc': return 'sendGsoc';
     default: return null;
   }
 }
