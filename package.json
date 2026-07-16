@@ -19,6 +19,7 @@
     "README.md"
   ],
   "scripts": {
+    "prepare": "npm run build:lib",
     "build": "npm run build:lib && npm run build:playground && npm run build:provider-compliance && npm run build:test-center && npm run build:chat",
     "build:lib": "tsc -p tsconfig.json",
     "build:playground": "esbuild src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=examples/epoch-feed-smoke/swarm-kit.js",
