@@ -94,7 +94,7 @@ wants the same behavior.)
 
 - The reader, verified mode, and a pure-JS publisher exist and are tested
   (npm package `swarmlite`; live demo root
-  `bzz://5ac6a781227c7481bbc8da9bc0e9abb87179f8c542c764acdcaa72806d8634da/`).
+  `bzz://d1d54686def7f40714d093f2d8c4a2739d6d905d16b834b41f04b7128be8690b/`).
 - The provider adapter above is a sketch: it type-checks against
   `src/provider.ts` but has not yet run inside Freedom Browser. The natural
   first test is the provider-compliance route: a small page that opens a
